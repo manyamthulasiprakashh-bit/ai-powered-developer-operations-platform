@@ -1,42 +1,24 @@
 # AI-Powered Developer Operations Platform
 
-A production-style portfolio project for AI-assisted developer operations and debugging workflows.
+A production-style portfolio project for GitHub repository intelligence, health monitoring, and developer workflow visibility.
 
-## Overview
+## Live Demo
 
-This platform helps engineering teams connect to a GitHub repository, inspect code and change history, analyze incidents, and get AI-powered explanations and remediation suggestions. The project intentionally follows a clean separation between frontend, backend, integrations, AI services, and data persistence.
+This project is designed for a public portfolio deployment with a React frontend and FastAPI backend.
 
-## Phase 1 Foundation
-
-This repository currently includes the initial foundation for the project:
-
-- FastAPI backend skeleton
-- environment-driven configuration
-- request logging middleware
-- health endpoint
-- PostgreSQL-ready SQLAlchemy setup using a binary-compatible PostgreSQL driver
-- Docker-ready project layout
-- initial frontend scaffold
-- project documentation skeleton
+- Frontend: deployed behind a production host with the backend URL supplied via `VITE_API_BASE_URL`
+- Backend: FastAPI service deployed with `PORT` from the hosting platform
+- API docs: generated automatically by FastAPI at `/docs`
 
 ## Architecture
 
-- Frontend: React + TypeScript + Vite + Tailwind
-- Backend: Python + FastAPI + SQLAlchemy + Pydantic
-- Data layer: PostgreSQL
-- Infrastructure: Docker + Docker Compose
-- AI: provider abstraction ready for LLM integration
+- Frontend: React + TypeScript + Vite + Tailwind CSS
+- Backend: Python + FastAPI + Pydantic settings
+- External integration: GitHub REST API via configurable `GITHUB_API_URL`
+- Production hosting pattern: backend on a trusted app platform, frontend on a static site host
+- Local development: Docker Compose for the API service and local Vite frontend
 
-## Features Included in Phase 1
-
-- health endpoint at `/api/health`
-- backend app bootstrap
-- configuration management
-- structured logging setup
-- Docker-ready structure
-- repository skeleton for later phases
-
-## Setup
+## Local Development
 
 ### Backend
 
@@ -56,19 +38,58 @@ npm install
 npm run dev
 ```
 
-### Environment
+### Docker Compose
 
-Copy the sample environment file and adjust values if needed:
+```bash
+docker compose up --build
+```
+
+## Environment Variables
+
+Copy the sample values and adjust for your environment:
 
 ```bash
 cp .env.example .env
 ```
 
-## Running with Docker
+Required variables for production deployment:
 
-```bash
-docker compose up --build
-```
+- `PORT`: platform-provided backend port; the app listens on this value in production
+- `CORS_ALLOWED_ORIGINS`: comma-separated allowed frontend origins for browser access
+- `GITHUB_API_URL`: optional override for the GitHub API endpoint; defaults to `https://api.github.com`
+- `GITHUB_TOKEN`: optional GitHub token for higher rate limits; keep it out of source control
+- `DATABASE_URL`: required when the app is connected to Postgres
+- `VITE_API_BASE_URL`: frontend API base URL used for deployed backend requests
+
+Never hardcode secrets or tokens in the repository. Keep values in the deployment platform's environment settings.
+
+## Deployment
+
+This project is intentionally structured for a simple deployment flow:
+
+1. Deploy the FastAPI backend to a platform that sets `PORT` automatically.
+2. Configure allowed CORS origins for the deployed frontend URL.
+3. Set `VITE_API_BASE_URL` to the deployed backend URL in the frontend build environment.
+4. Keep the GitHub integration unchanged and rely on the public GitHub REST API unless a token is provided.
+
+### Recommended production architecture
+
+- Backend: Render or another app platform that supports FastAPI
+- Frontend: Cloudflare Pages, Vercel, or Netlify for the static React build
+- GitHub integration: direct REST API calls with optional token support via environment variables
+
+## API Endpoints
+
+Core endpoints:
+
+- `GET /api/health` — backend service health check
+- `GET /api/github/repositories/{owner}/{repo}` — repository metadata
+- `GET /api/github/repositories/{owner}/{repo}/commits` — recent commits
+- `GET /api/github/repositories/{owner}/{repo}/pull-requests` — pull requests
+- `GET /api/github/repositories/{owner}/{repo}/issues` — repository issues
+- `GET /api/github/repositories/{owner}/{repo}/contents` — repository contents
+
+FastAPI also exposes interactive docs at `/docs` and `/redoc`.
 
 ## Testing
 
@@ -77,17 +98,13 @@ cd backend
 pytest
 ```
 
+```bash
+cd frontend
+npm run build
+```
+
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)
 - [docs/development.md](docs/development.md)
-
-## Future Improvements
-
-- GitHub repository integration
-- repository analyzer
-- AI-powered debugging workflows
-- incident and log analysis
-- dashboard UI and API endpoints
-- robust database models and migrations
