@@ -168,3 +168,23 @@ V5 adds bounded retries with exponential backoff and jitter for transient read-o
 ## V6 - Observability
 
 V6 adds JSON-compatible logs, safe `X-Request-ID` correlation, bounded aggregate metrics at `/metrics`, GitHub/cache/retry/circuit instrumentation, and `/health`/`/ready` aliases while preserving the existing `/api/health` and `/api/ready` endpoints. See [docs/observability.md](docs/observability.md). These are locally implemented and CI-validated foundations; no external monitoring or deployment is claimed.
+
+## V7 - Production Deployment Readiness
+
+### Production architecture
+
+Deploy two independently managed services: a FastAPI backend container and a static Vite frontend served by the unprivileged Nginx image. The frontend calls the backend origin configured at build time through `VITE_API_BASE_URL`; the backend calls GitHub using server-side configuration and optional `GITHUB_TOKEN`. PostgreSQL remains a local Compose dependency only and is not used by current request handling.
+
+### Required platform settings
+
+For the backend service, set `APP_ENV=production`, `APP_DEBUG=false`, `CORS_ALLOWED_ORIGINS` to the exact HTTPS frontend origin, and allow the hosting platform to provide `PORT`. Configure the existing GitHub, timeout, cache, retry, circuit-breaker, rate-limit, and logging variables from `.env.example` as needed. Keep `GITHUB_TOKEN`, database credentials, and other secrets in the platform secret store.
+
+For the frontend service, set the build variable `VITE_API_BASE_URL` to the exact public HTTPS backend origin. No frontend secret belongs in a `VITE_*` variable because Vite embeds those values into browser assets. Production builds fail when this variable is absent; localhost is retained only for local development and Compose defaults.
+
+### Deployment commands and checks
+
+Backend startup command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (the backend Dockerfile already supplies this behavior). Frontend startup is the Nginx container command in [frontend/Dockerfile](frontend/Dockerfile). After each service is hosted, verify `GET /health`, `GET /ready`, and `GET /metrics` on the backend, then verify the frontend can load repository data through the configured backend origin. Set the final frontend origin in `CORS_ALLOWED_ORIGINS` only after it exists.
+
+### Deployment status and blockers
+
+Deployment is not complete until a public backend host and frontend host are configured and externally verified. This repository does not invent public URLs, provision cloud resources, configure provider credentials, or claim a successful deployment. Docker was unavailable during local validation, and external DNS, TLS, platform environment settings, CORS from the final browser origin, GitHub access, and public frontend/backend communication remain deployment-time checks.
