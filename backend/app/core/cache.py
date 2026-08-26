@@ -6,6 +6,8 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.core.metrics import metrics
+
 
 class AsyncTTLCache:
     """Bounded process-local TTL cache with per-key single-flight loading."""
@@ -20,17 +22,23 @@ class AsyncTTLCache:
         self._locks: dict[str, asyncio.Lock] = {}
         self._overflow_lock = asyncio.Lock()
 
-    async def get(self, key: str) -> Any | None:
+    async def get(self, key: str, record_metrics: bool = True) -> Any | None:
         if not self.enabled:
             return None
         entry = self._entries.get(key)
         if entry is None:
+            if record_metrics:
+                metrics.increment("cache_misses_total")
             return None
         expires_at, value = entry
         if expires_at <= time.monotonic():
             self._entries.pop(key, None)
+            if record_metrics:
+                metrics.increment("cache_misses_total")
             return None
         self._entries.move_to_end(key)
+        if record_metrics:
+            metrics.increment("cache_hits_total")
         return value
 
     async def set(self, key: str, value: Any) -> None:
@@ -45,7 +53,7 @@ class AsyncTTLCache:
         if not self.enabled:
             return await loader()
         try:
-            cached = await self.get(key)
+            cached = await self.get(key, record_metrics=False)
         except Exception:
             return await loader()
         if cached is not None:
@@ -56,7 +64,7 @@ class AsyncTTLCache:
             lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
             try:
-                cached = await self.get(key)
+                cached = await self.get(key, record_metrics=False)
             except Exception:
                 cached = None
             if cached is not None:

@@ -19,6 +19,7 @@ from app.core.exceptions import (
     GitHubTimeoutError,
 )
 from app.core.logging import configure_logging
+from app.core.metrics import metrics
 from app.core.security import InMemoryRateLimiter, redact_sensitive
 
 configure_logging()
@@ -70,7 +71,7 @@ def add_security_headers(response):
 
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
-    exempt_paths = {"/api/health", "/api/ready"}
+    exempt_paths = {"/api/health", "/api/ready", "/health", "/ready", "/metrics"}
     if request.method != "OPTIONS" and request.url.path not in exempt_paths:
         client_key = request.client.host if request.client else "unknown"
         allowed, retry_after = app.state.rate_limiter.allow(f"{client_key}:{request.url.path}")
@@ -89,21 +90,19 @@ async def request_logging_middleware(request: Request, call_next):
     request_id = supplied_request_id if REQUEST_ID_PATTERN.fullmatch(supplied_request_id) else str(uuid4())
     request.state.request_id = request_id
     start_time = time.perf_counter()
-    logger.info("request_started method=%s path=%s request_id=%s", request.method, request.url.path, request_id)
+    logger.info("request_started", extra={"method": request.method, "path": request.url.path, "request_id": request_id})
+    metrics.increment("http_requests_total")
     try:
         response = await call_next(request)
     except Exception:
-        logger.exception("request_failed method=%s path=%s request_id=%s", request.method, request.url.path, request_id)
+        metrics.increment("http_errors_total")
+        logger.exception("request_failed", extra={"method": request.method, "path": request.url.path, "request_id": request_id})
         raise
     process_time = time.perf_counter() - start_time
-    logger.info(
-        "request method=%s path=%s status=%s duration=%.4fs request_id=%s",
-        request.method,
-        request.url.path,
-        response.status_code,
-        process_time,
-        request_id,
-    )
+    if response.status_code >= 400:
+        metrics.increment("http_errors_total")
+    metrics.observe_duration("http_request_duration_seconds", process_time)
+    logger.info("request_completed", extra={"method": request.method, "path": request.url.path, "status": response.status_code, "duration_seconds": round(process_time, 6), "request_id": request_id})
     response.headers["X-Request-ID"] = request_id
     return response
 
@@ -140,7 +139,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    logger.info("request_validation_failed method=%s path=%s", request.method, request.url.path)
+    logger.info("request_validation_failed", extra={"method": request.method, "path": request.url.path, "request_id": getattr(request.state, "request_id", None)})
     return JSONResponse(status_code=422, content={"detail": "Invalid request parameters.", "error": "invalid_request", "message": "Invalid request parameters.", "retryable": False})
 
 
@@ -176,7 +175,13 @@ async def unexpected_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error."})
 
 
+@app.get("/metrics")
+def metrics_endpoint():
+    return metrics.snapshot()
+
+
 @app.get("/api/health")
+@app.get("/health")
 def health_check():
     return {
         "status": "ok",
@@ -186,6 +191,7 @@ def health_check():
 
 
 @app.get("/api/ready")
+@app.get("/ready")
 def readiness_check():
     return {
         "status": "ready",

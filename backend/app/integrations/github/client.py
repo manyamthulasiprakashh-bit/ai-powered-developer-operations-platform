@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -15,6 +16,7 @@ from app.core.exceptions import (
     GitHubTimeoutError,
 )
 from app.core.reliability import CircuitBreaker, bounded_retry, is_retryable
+from app.core.metrics import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -119,15 +121,21 @@ class GitHubClient:
     async def _request_async(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
         async def operation():
             await self.circuit_breaker.before_call()
+            metrics.increment("github_requests_total")
+            started = time.perf_counter()
             try:
                 result = await self._request_async_once(method, path, params)
             except Exception as error:
+                metrics.increment("github_failures_total")
                 await self.circuit_breaker.record_failure(error)
                 raise
+            finally:
+                metrics.observe_duration("github_request_duration_seconds", time.perf_counter() - started)
             await self.circuit_breaker.record_success()
             return result
 
         def log_retry(attempt: int, error: BaseException) -> None:
+            metrics.increment("github_retry_attempts_total")
             logger.warning(
                 "github_retry operation=%s path=%s attempt=%s error=%s",
                 method,

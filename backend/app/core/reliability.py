@@ -16,6 +16,7 @@ from app.core.exceptions import (
     GitHubServiceError,
     GitHubTimeoutError,
 )
+from app.core.metrics import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -116,12 +117,14 @@ class CircuitBreaker:
                 self.state = CircuitState.OPEN
                 self.opened_at = time.monotonic()
                 self._half_open_calls = 0
+                metrics.increment("github_circuit_openings_total")
                 logger.error("github_circuit event=open reason=half_open_failure")
                 return
             self.failure_count += 1
             if self.failure_count >= self.failure_threshold:
                 self.state = CircuitState.OPEN
                 self.opened_at = time.monotonic()
+                metrics.increment("github_circuit_openings_total")
                 logger.error("github_circuit event=open reason=failure_threshold")
 
 

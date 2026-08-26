@@ -27,7 +27,7 @@ def test_request_id_is_generated_and_supplied_id_is_preserved(caplog):
 
     assert len(generated.headers["X-Request-ID"]) > 10
     assert supplied.headers["X-Request-ID"] == "test-request-123"
-    assert any("request_id=test-request-123" in record.message for record in caplog.records)
+    assert any(getattr(record, "request_id", None) == "test-request-123" for record in caplog.records)
 
 
 def test_cors_allows_configured_origin_and_rejects_other_origins():

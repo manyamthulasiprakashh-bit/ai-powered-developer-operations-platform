@@ -164,3 +164,7 @@ The cache and single-flight coordination are process-local, so multiple backend 
 ## V5 - Robustness & Reliability
 
 V5 adds bounded retries with exponential backoff and jitter for transient read-only GitHub failures, a process-local circuit breaker, structured retryable error metadata while retaining `detail`, request correlation IDs, cache failure isolation, stale-response protection, and contract/regression tests. See [docs/reliability.md](docs/reliability.md) for the failure model and limitations. No production reliability or availability claim is made.
+
+## V6 - Observability
+
+V6 adds JSON-compatible logs, safe `X-Request-ID` correlation, bounded aggregate metrics at `/metrics`, GitHub/cache/retry/circuit instrumentation, and `/health`/`/ready` aliases while preserving the existing `/api/health` and `/api/ready` endpoints. See [docs/observability.md](docs/observability.md). These are locally implemented and CI-validated foundations; no external monitoring or deployment is claimed.
