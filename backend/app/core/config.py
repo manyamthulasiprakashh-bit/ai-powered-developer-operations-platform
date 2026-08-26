@@ -25,6 +25,14 @@ class Settings(BaseSettings):
     )
     rate_limit_requests: int = Field(default=60, ge=1)
     rate_limit_window_seconds: int = Field(default=60, ge=1)
+    github_connect_timeout: float = Field(default=5.0, gt=0)
+    github_read_timeout: float = Field(default=15.0, gt=0)
+    github_max_connections: int = Field(default=100, ge=1)
+    github_max_keepalive_connections: int = Field(default=20, ge=1)
+    github_max_per_page: int = Field(default=100, ge=1, le=100)
+    cache_enabled: bool = True
+    cache_ttl_seconds: float = Field(default=60.0, ge=0)
+    cache_max_entries: int = Field(default=500, ge=1)
 
     @field_validator("backend_port", mode="before")
     @classmethod

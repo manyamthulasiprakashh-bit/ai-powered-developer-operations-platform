@@ -146,3 +146,17 @@ PostgreSQL migrations and runtime persistence are not implemented, GitHub calls 
 V3 adds environment-validated production CORS, security response headers, configurable process-local rate limiting, bounded and traversal-safe inputs, secret-safe error responses, reusable log redaction, non-root frontend serving, and dependency audit steps in CI. Current read-only endpoints remain public; authentication is intentionally a future boundary rather than an invented user system.
 
 See [docs/security.md](docs/security.md) for the threat model, implemented controls, compliance-oriented design, and known limitations. This is security hardening, not a compliance certification or production security audit.
+
+## V4 - Scalability
+
+### Implemented now
+
+- GitHub reads use an async `httpx` client with connection pooling and separate connect/read timeouts configured through environment variables.
+- GitHub responses use a bounded, configurable TTL cache. Identical concurrent cache misses are single-flighted within one backend process; errors are never cached.
+- Pagination remains bounded, with `GITHUB_MAX_PER_PAGE` controlling the list endpoints.
+- The shared GitHub client is closed through FastAPI lifespan handling. Health and readiness remain lightweight and do not depend on GitHub availability.
+- The frontend API contract and UI are unchanged. Existing synchronous client doubles remain supported by the service compatibility path.
+
+### Future production scale
+
+The cache and single-flight coordination are process-local, so multiple backend instances can still issue duplicate upstream requests. A distributed cache/lock service, background refresh jobs, metrics, and a production database would be needed for larger deployments. The current application does not claim horizontal scalability has been proven, and repository synchronization/content indexing remain synchronous request candidates for future workers.

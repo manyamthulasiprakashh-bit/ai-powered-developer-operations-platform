@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
@@ -11,14 +12,17 @@ from app.core.exceptions import (
     GitHubServiceError,
     GitHubTimeoutError,
 )
+from app.core.config import get_settings
 from app.services.github_service import GitHubService
 
 router = APIRouter(prefix="/api/github", tags=["GitHub"])
+settings = get_settings()
 
 RepositoryPart = Annotated[str, Path(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")]
 ContentPath = Annotated[str, Query(max_length=512)]
 
 
+@lru_cache
 def get_github_service() -> GitHubService:
     return GitHubService()
 
@@ -28,13 +32,13 @@ def get_github_service() -> GitHubService:
     summary="Get repository metadata",
     description="Retrieve summary data for a GitHub repository.",
 )
-def get_repository(
+async def get_repository(
     owner: RepositoryPart,
     repo: RepositoryPart,
     service: Annotated[GitHubService, Depends(get_github_service)],
 ):
     try:
-        return service.get_repository(owner, repo).model_dump(mode="json")
+        return (await service.get_repository_async(owner, repo)).model_dump(mode="json")
     except GitHubNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except GitHubAuthError as exc:
@@ -52,15 +56,15 @@ def get_repository(
     summary="Get repository commits",
     description="Retrieve recent commits with pagination support.",
 )
-def get_commits(
+async def get_commits(
     owner: RepositoryPart,
     repo: RepositoryPart,
     page: Annotated[int, Query(ge=1)] = 1,
-    per_page: Annotated[int, Query(ge=1, le=100)] = 30,
+    per_page: Annotated[int, Query(ge=1, le=settings.github_max_per_page)] = 30,
     service: Annotated[GitHubService, Depends(get_github_service)] = None,
 ):
     try:
-        commits = service.get_commits(owner, repo, page=page, per_page=per_page)
+        commits = await service.get_commits_async(owner, repo, page=page, per_page=per_page)
         return [item.model_dump(mode="json") for item in commits]
     except GitHubNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -79,16 +83,16 @@ def get_commits(
     summary="Get pull requests",
     description="Retrieve pull requests for the repository, filtered by state.",
 )
-def get_pull_requests(
+async def get_pull_requests(
     owner: RepositoryPart,
     repo: RepositoryPart,
     state: Literal["open", "closed", "all"] = "open",
     page: Annotated[int, Query(ge=1)] = 1,
-    per_page: Annotated[int, Query(ge=1, le=100)] = 30,
+    per_page: Annotated[int, Query(ge=1, le=settings.github_max_per_page)] = 30,
     service: Annotated[GitHubService, Depends(get_github_service)] = None,
 ):
     try:
-        prs = service.get_pull_requests(owner, repo, state=state, page=page, per_page=per_page)
+        prs = await service.get_pull_requests_async(owner, repo, state=state, page=page, per_page=per_page)
         return [item.model_dump(mode="json") for item in prs]
     except GitHubNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -107,16 +111,16 @@ def get_pull_requests(
     summary="Get repository issues",
     description="Retrieve issues while excluding pull requests from the list.",
 )
-def get_issues(
+async def get_issues(
     owner: RepositoryPart,
     repo: RepositoryPart,
     state: Literal["open", "closed", "all"] = "open",
     page: Annotated[int, Query(ge=1)] = 1,
-    per_page: Annotated[int, Query(ge=1, le=100)] = 30,
+    per_page: Annotated[int, Query(ge=1, le=settings.github_max_per_page)] = 30,
     service: Annotated[GitHubService, Depends(get_github_service)] = None,
 ):
     try:
-        issues = service.get_issues(owner, repo, state=state, page=page, per_page=per_page)
+        issues = await service.get_issues_async(owner, repo, state=state, page=page, per_page=per_page)
         return [item.model_dump(mode="json") for item in issues]
     except GitHubNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -135,7 +139,7 @@ def get_issues(
     summary="Get repository contents",
     description="List contents for the repository root or a specific path with a safe page limit.",
 )
-def get_contents(
+async def get_contents(
     owner: RepositoryPart,
     repo: RepositoryPart,
     path: ContentPath = "",
@@ -146,7 +150,7 @@ def get_contents(
     if ".." in path.split("/"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid repository path.")
     try:
-        contents = service.get_contents(owner, repo, path=path, page=page, per_page=per_page)
+        contents = await service.get_contents_async(owner, repo, path=path, page=page, per_page=per_page)
         if isinstance(contents, list):
             return [item.model_dump(mode="json") for item in contents]
         return contents.model_dump(mode="json")

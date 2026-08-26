@@ -1,12 +1,13 @@
 import logging
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes.github import router as github_router
+from app.api.routes.github import get_github_service, router as github_router
 from app.core.config import get_settings
 from app.core.exceptions import (
     GitHubAuthError,
@@ -22,10 +23,18 @@ configure_logging()
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    yield
+    await get_github_service().aclose()
+
+
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     description="AI-Powered Developer Operations Platform",
+    lifespan=lifespan,
 )
 
 app.include_router(github_router)
