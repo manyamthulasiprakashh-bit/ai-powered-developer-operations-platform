@@ -49,7 +49,12 @@ class GitHubService:
         return result
 
     async def _cached_payload(self, key: str, operation: str, *args, **kwargs):
-        if await self.cache.get(key) is not None:
+        try:
+            cache_hit = await self.cache.get(key) is not None
+        except Exception:
+            cache_hit = False
+            logger.warning("github_cache event=unavailable operation=%s", operation)
+        if cache_hit:
             logger.info("github_cache event=hit operation=%s", operation)
         else:
             logger.info("github_cache event=miss operation=%s", operation)

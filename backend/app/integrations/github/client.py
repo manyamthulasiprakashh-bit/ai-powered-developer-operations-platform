@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import httpx
@@ -7,11 +8,15 @@ import httpx
 from app.core.config import get_settings
 from app.core.exceptions import (
     GitHubAuthError,
+    GitHubHTTPError,
     GitHubNotFoundError,
     GitHubRateLimitError,
     GitHubServiceError,
     GitHubTimeoutError,
 )
+from app.core.reliability import CircuitBreaker, bounded_retry, is_retryable
+
+logger = logging.getLogger(__name__)
 
 
 class GitHubClient:
@@ -25,6 +30,15 @@ class GitHubClient:
             max_keepalive_connections=settings.github_max_keepalive_connections,
         )
         self._async_client: httpx.AsyncClient | None = None
+        self.max_retries = settings.github_max_retries
+        self.retry_base_delay = settings.github_retry_base_delay_seconds
+        self.retry_max_delay = settings.github_retry_max_delay_seconds
+        self.circuit_breaker = CircuitBreaker(
+            enabled=settings.circuit_breaker_enabled,
+            failure_threshold=settings.circuit_breaker_failure_threshold,
+            reset_timeout_seconds=settings.circuit_breaker_reset_timeout_seconds,
+            half_open_max_calls=settings.circuit_breaker_half_open_max_calls,
+        )
 
     def _headers(self) -> dict[str, str]:
         headers = {
@@ -67,7 +81,7 @@ class GitHubClient:
         except ValueError as exc:
             raise GitHubServiceError("GitHub returned malformed data.") from exc
 
-    async def _request_async(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+    async def _request_async_once(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
         if self._async_client is None:
             self._async_client = httpx.AsyncClient(timeout=self.timeout, limits=self.limits)
         url = f"{self.base_url}{path}"
@@ -89,14 +103,51 @@ class GitHubClient:
             if response.headers.get("x-ratelimit-remaining") == "0":
                 raise GitHubRateLimitError("GitHub API rate limit exceeded. Please try again later.")
             raise GitHubServiceError("GitHub request forbidden.")
+        if response.status_code == 429:
+            raise GitHubRateLimitError("GitHub API rate limit exceeded. Please try again later.")
         if response.status_code == 404:
             raise GitHubNotFoundError(f"GitHub resource not found: {path}")
         if response.status_code >= 400:
+            if response.status_code >= 500:
+                raise GitHubHTTPError(f"GitHub API error: {response.status_code}", response.status_code)
             raise GitHubServiceError(f"GitHub API error: {response.status_code}")
         try:
             return response.json()
         except ValueError as exc:
             raise GitHubServiceError("GitHub returned malformed data.") from exc
+
+    async def _request_async(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+        async def operation():
+            await self.circuit_breaker.before_call()
+            try:
+                result = await self._request_async_once(method, path, params)
+            except Exception as error:
+                await self.circuit_breaker.record_failure(error)
+                raise
+            await self.circuit_breaker.record_success()
+            return result
+
+        def log_retry(attempt: int, error: BaseException) -> None:
+            logger.warning(
+                "github_retry operation=%s path=%s attempt=%s error=%s",
+                method,
+                path,
+                attempt,
+                type(error).__name__,
+            )
+
+        try:
+            return await bounded_retry(
+                operation,
+                max_retries=self.max_retries,
+                base_delay=self.retry_base_delay,
+                max_delay=self.retry_max_delay,
+                on_retry=log_retry,
+            )
+        except Exception as error:
+            if is_retryable(error):
+                logger.error("github_retry_exhausted operation=%s path=%s error=%s", method, path, type(error).__name__)
+            raise
 
     async def aclose(self) -> None:
         if self._async_client is not None:

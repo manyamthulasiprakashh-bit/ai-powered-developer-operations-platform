@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getCommits, getContents, getIssues, getPullRequests, getRepository } from '../services/github';
 import type { Commit, Issue, PullRequest, Repository, RepositoryContent } from '../types';
 
@@ -282,6 +282,7 @@ export function GitHubRepositoryPage({ owner, repo, onNavigate }: GitHubReposito
   const [prState, setPrState] = useState<'open' | 'closed' | 'all'>(defaultPullRequestState);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const requestSequence = useRef(0);
 
   const repositoryId = useMemo(() => `${(owner ?? '').trim()}/${(repo ?? '').trim()}`.trim(), [owner, repo]);
 
@@ -295,6 +296,7 @@ export function GitHubRepositoryPage({ owner, repo, onNavigate }: GitHubReposito
 
     setIsLoading(true);
     setError('');
+    const requestId = ++requestSequence.current;
 
     try {
       const [repoData, commitData, prData, issueData, contentsData] = await Promise.all([
@@ -305,21 +307,18 @@ export function GitHubRepositoryPage({ owner, repo, onNavigate }: GitHubReposito
         getContents(trimmedOwner, trimmedRepo, 1, 30),
       ]);
 
+      if (requestId !== requestSequence.current) return;
       setRepository(repoData);
       setCommits(commitData);
       setPullRequests(prData);
       setIssues(issueData);
       setContents(contentsData);
     } catch (loadError) {
+      if (requestId !== requestSequence.current) return;
       const message = loadError instanceof Error ? loadError.message : 'Unable to load repository data.';
-      setRepository(null);
-      setCommits([]);
-      setPullRequests([]);
-      setIssues([]);
-      setContents([]);
       setError(message);
     } finally {
-      setIsLoading(false);
+      if (requestId === requestSequence.current) setIsLoading(false);
     }
   };
 
@@ -334,12 +333,7 @@ export function GitHubRepositoryPage({ owner, repo, onNavigate }: GitHubReposito
     }
 
     fetchRepositoryData(owner, repo);
-  }, [owner, repo]);
-
-  useEffect(() => {
-    if (!owner || !repo) return;
-    fetchRepositoryData(owner, repo);
-  }, [issueState, prState]);
+  }, [owner, repo, issueState, prState]);
 
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();

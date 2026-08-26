@@ -5,7 +5,8 @@ import pytest
 
 from app.core.cache import AsyncTTLCache
 from app.core.config import Settings, get_settings
-from app.core.exceptions import GitHubServiceError, GitHubTimeoutError
+from app.core.exceptions import GitHubCircuitOpenError, GitHubHTTPError, GitHubServiceError, GitHubTimeoutError
+from app.core.reliability import CircuitBreaker, CircuitState, FailureKind, bounded_retry, classify_failure, is_retryable
 from app.integrations.github.client import GitHubClient
 from app.services.github_service import GitHubService
 
@@ -36,6 +37,20 @@ class StubAsyncHttpClient:
         if self.error:
             raise self.error
         return self.response
+
+    async def aclose(self):
+        pass
+
+
+class SequenceAsyncHttpClient:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+
+    async def request(self, **kwargs):
+        response = next(self.responses)
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
     async def aclose(self):
         pass
@@ -75,6 +90,149 @@ async def test_async_github_client_maps_malformed_response():
 
     with pytest.raises(GitHubServiceError, match="malformed data"):
         await client.aget_repository("owner", "repo")
+
+
+@pytest.mark.anyio
+async def test_async_github_client_retries_5xx_then_succeeds():
+    client = GitHubClient(base_url="https://github.example")
+    client.max_retries = 1
+    client.retry_base_delay = 0
+    client.retry_max_delay = 0
+    client._async_client = SequenceAsyncHttpClient([
+        httpx.Response(503),
+        httpx.Response(200, json={"name": "repo"}),
+    ])
+    assert await client.aget_repository("owner", "repo") == {"name": "repo"}
+
+
+@pytest.mark.anyio
+async def test_async_github_client_retries_rate_limit_then_succeeds():
+    client = GitHubClient(base_url="https://github.example")
+    client.max_retries = 1
+    client.retry_base_delay = 0
+    client.retry_max_delay = 0
+    client._async_client = SequenceAsyncHttpClient([
+        httpx.Response(429),
+        httpx.Response(200, json={"name": "repo"}),
+    ])
+
+    assert await client.aget_repository("owner", "repo") == {"name": "repo"}
+
+
+@pytest.mark.anyio
+async def test_async_github_client_retries_timeout_then_succeeds():
+    client = GitHubClient(base_url="https://github.example")
+    client.max_retries = 1
+    client.retry_base_delay = 0
+    client.retry_max_delay = 0
+    client._async_client = SequenceAsyncHttpClient([
+        httpx.ReadTimeout("timeout"),
+        httpx.Response(200, json={"name": "repo"}),
+    ])
+
+    assert await client.aget_repository("owner", "repo") == {"name": "repo"}
+
+
+@pytest.mark.anyio
+async def test_async_github_client_stops_after_bounded_retries():
+    client = GitHubClient(base_url="https://github.example")
+    client.max_retries = 2
+    client.retry_base_delay = 0
+    client.retry_max_delay = 0
+    client._async_client = SequenceAsyncHttpClient([
+        httpx.Response(503),
+        httpx.Response(503),
+        httpx.Response(503),
+        httpx.Response(503),
+    ])
+
+    with pytest.raises(GitHubHTTPError):
+        await client.aget_repository("owner", "repo")
+
+
+@pytest.mark.anyio
+async def test_bounded_retry_does_not_retry_non_transient_error():
+    calls = 0
+
+    async def operation():
+        nonlocal calls
+        calls += 1
+        raise GitHubServiceError("not retryable")
+
+    with pytest.raises(GitHubServiceError):
+        await bounded_retry(operation, max_retries=3, base_delay=0, max_delay=0)
+    assert calls == 1
+
+
+def test_failure_classification_distinguishes_transient_and_permanent_errors():
+    assert classify_failure(GitHubTimeoutError("timeout")) == FailureKind.TIMEOUT
+    assert classify_failure(httpx.ConnectError("connection failed")) == FailureKind.CONNECTION
+    assert classify_failure(GitHubHTTPError("server", 503)) == FailureKind.SERVER_ERROR
+    assert classify_failure(GitHubHTTPError("client", 400)) == FailureKind.CLIENT_ERROR
+    assert is_retryable(GitHubTimeoutError("timeout"))
+    assert not is_retryable(GitHubServiceError("malformed data"))
+
+
+@pytest.mark.anyio
+async def test_circuit_breaker_opens_and_recovers(monkeypatch):
+    current_time = 100.0
+    monkeypatch.setattr("app.core.reliability.time.monotonic", lambda: current_time)
+    breaker = CircuitBreaker(enabled=True, failure_threshold=2, reset_timeout_seconds=10)
+
+    await breaker.record_failure(GitHubTimeoutError("timeout"))
+    await breaker.record_failure(GitHubTimeoutError("timeout"))
+    assert breaker.state == CircuitState.OPEN
+    with pytest.raises(GitHubCircuitOpenError):
+        await breaker.before_call()
+    current_time = 111.0
+    await breaker.before_call()
+    assert breaker.state == CircuitState.HALF_OPEN
+    await breaker.record_success()
+    assert breaker.state == CircuitState.CLOSED
+
+
+@pytest.mark.anyio
+async def test_failed_half_open_probe_reopens_circuit(monkeypatch):
+    current_time = 100.0
+    monkeypatch.setattr("app.core.reliability.time.monotonic", lambda: current_time)
+    breaker = CircuitBreaker(enabled=True, failure_threshold=1, reset_timeout_seconds=10)
+
+    await breaker.record_failure(GitHubTimeoutError("timeout"))
+    current_time = 111.0
+    await breaker.before_call()
+    await breaker.record_failure(GitHubTimeoutError("timeout"))
+
+    assert breaker.state == CircuitState.OPEN
+
+
+@pytest.mark.anyio
+async def test_disabled_circuit_breaker_preserves_request_flow():
+    breaker = CircuitBreaker(enabled=False, failure_threshold=1, reset_timeout_seconds=10)
+
+    await breaker.record_failure(GitHubTimeoutError("timeout"))
+    await breaker.before_call()
+
+    assert breaker.state == CircuitState.CLOSED
+
+
+@pytest.mark.anyio
+async def test_failed_single_flight_does_not_poison_future_request():
+    class FlakyClient(AsyncRepositoryClient):
+        async def aget_repository(self, owner, repo):
+            if self.calls == 0:
+                self.calls = 1
+                raise GitHubTimeoutError("timeout")
+            return await super().aget_repository(owner, repo)
+
+    client = FlakyClient()
+    service = GitHubService(client=client)
+
+    with pytest.raises(GitHubTimeoutError):
+        await service.get_repository_async("owner", "repo")
+    result = await service.get_repository_async("owner", "repo")
+
+    assert result.full_name == "owner/repo"
+    assert client.calls == 2
 
 
 @pytest.mark.anyio
@@ -150,6 +308,26 @@ async def test_cache_does_not_store_errors():
     with pytest.raises(GitHubServiceError):
         await cache.get_or_set("a", failing_loader)
     assert calls == 2
+
+
+@pytest.mark.anyio
+async def test_cache_failures_fall_back_to_upstream():
+    client = AsyncRepositoryClient()
+    service = GitHubService(client=client)
+
+    async def broken_get(_key):
+        raise RuntimeError("cache unavailable")
+
+    async def broken_set(_key, _value):
+        raise RuntimeError("cache unavailable")
+
+    service.cache.get = broken_get
+    service.cache.set = broken_set
+
+    result = await service.get_repository_async("owner", "repo")
+
+    assert result.full_name == "owner/repo"
+    assert client.calls == 1
 
 
 def test_github_client_uses_configured_connection_limits_and_timeouts(monkeypatch):

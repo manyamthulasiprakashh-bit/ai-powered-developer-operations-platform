@@ -160,3 +160,7 @@ See [docs/security.md](docs/security.md) for the threat model, implemented contr
 ### Future production scale
 
 The cache and single-flight coordination are process-local, so multiple backend instances can still issue duplicate upstream requests. A distributed cache/lock service, background refresh jobs, metrics, and a production database would be needed for larger deployments. The current application does not claim horizontal scalability has been proven, and repository synchronization/content indexing remain synchronous request candidates for future workers.
+
+## V5 - Robustness & Reliability
+
+V5 adds bounded retries with exponential backoff and jitter for transient read-only GitHub failures, a process-local circuit breaker, structured retryable error metadata while retaining `detail`, request correlation IDs, cache failure isolation, stale-response protection, and contract/regression tests. See [docs/reliability.md](docs/reliability.md) for the failure model and limitations. No production reliability or availability claim is made.

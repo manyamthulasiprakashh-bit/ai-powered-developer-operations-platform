@@ -29,7 +29,9 @@ def test_invalid_pagination_returns_safe_validation_error():
     response = TestClient(app).get("/api/github/repositories/owner/repo/commits?page=0")
 
     assert response.status_code == 422
-    assert response.json() == {"detail": "Invalid request parameters."}
+    assert response.json()["detail"] == "Invalid request parameters."
+    assert response.json()["error"] == "invalid_request"
+    assert response.json()["retryable"] is False
 
 
 def test_platform_config_reads_port_and_cors_origins(monkeypatch):

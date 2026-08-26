@@ -177,7 +177,9 @@ def test_repository_endpoint_maps_timeout_to_gateway_timeout():
     response = TestClient(app).get("/api/github/repositories/owner/repo")
 
     assert response.status_code == 504
-    assert response.json() == {"detail": "GitHub request timed out."}
+    assert response.json()["detail"] == "GitHub request timed out."
+    assert response.json()["error"] == "upstream_timeout"
+    assert response.json()["retryable"] is True
     app.dependency_overrides.clear()
 
 

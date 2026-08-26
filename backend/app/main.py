@@ -1,6 +1,8 @@
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -53,6 +55,8 @@ app.state.rate_limiter = InMemoryRateLimiter(
     window_seconds=settings.rate_limit_window_seconds,
 )
 
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,100}$")
+
 
 def add_security_headers(response):
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -81,20 +85,26 @@ async def security_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
+    supplied_request_id = request.headers.get("X-Request-ID", "")
+    request_id = supplied_request_id if REQUEST_ID_PATTERN.fullmatch(supplied_request_id) else str(uuid4())
+    request.state.request_id = request_id
     start_time = time.perf_counter()
+    logger.info("request_started method=%s path=%s request_id=%s", request.method, request.url.path, request_id)
     try:
         response = await call_next(request)
     except Exception:
-        logger.exception("request_failed method=%s path=%s", request.method, request.url.path)
+        logger.exception("request_failed method=%s path=%s request_id=%s", request.method, request.url.path, request_id)
         raise
     process_time = time.perf_counter() - start_time
     logger.info(
-        "request method=%s path=%s status=%s duration=%.4fs",
+        "request method=%s path=%s status=%s duration=%.4fs request_id=%s",
         request.method,
         request.url.path,
         response.status_code,
         process_time,
+        request_id,
     )
+    response.headers["X-Request-ID"] = request_id
     return response
 
 
@@ -107,17 +117,31 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         429: "Too many requests.",
         502: "GitHub service unavailable.",
         504: "GitHub request timed out.",
+        503: "GitHub service temporarily unavailable.",
     }
     detail = safe_details.get(exc.status_code, exc.detail)
     if exc.status_code == 429 and exc.detail == "GitHub API rate limit exceeded. Please try again later.":
         detail = exc.detail
-    return JSONResponse(status_code=exc.status_code, content={"detail": detail}, headers=exc.headers)
+    error_name = {
+        400: "invalid_request",
+        401: "github_authentication_failed",
+        404: "not_found",
+        429: "rate_limited",
+        502: "upstream_unavailable",
+        504: "upstream_timeout",
+        503: "circuit_open",
+    }.get(exc.status_code, "request_error")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": detail, "error": error_name, "message": detail, "retryable": exc.status_code in {429, 502, 503, 504}},
+        headers=exc.headers,
+    )
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.info("request_validation_failed method=%s path=%s", request.method, request.url.path)
-    return JSONResponse(status_code=422, content={"detail": "Invalid request parameters."})
+    return JSONResponse(status_code=422, content={"detail": "Invalid request parameters.", "error": "invalid_request", "message": "Invalid request parameters.", "retryable": False})
 
 
 @app.exception_handler(GitHubAuthError)

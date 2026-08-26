@@ -18,6 +18,14 @@ class GitHubServiceError(ExternalServiceError):
     """Raised when the GitHub API call fails."""
 
 
+class GitHubHTTPError(GitHubServiceError):
+    """Raised for an upstream HTTP response that may be transient."""
+
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 class GitHubAuthError(GitHubServiceError):
     """Raised when GitHub authentication fails."""
 
@@ -32,3 +40,7 @@ class GitHubNotFoundError(NotFoundError, GitHubServiceError):
 
 class GitHubTimeoutError(GitHubServiceError, TimeoutError):
     """Raised when a GitHub API request times out."""
+
+
+class GitHubCircuitOpenError(GitHubServiceError):
+    """Raised when GitHub calls are temporarily stopped after repeated failures."""

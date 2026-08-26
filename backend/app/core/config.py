@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     cache_enabled: bool = True
     cache_ttl_seconds: float = Field(default=60.0, ge=0)
     cache_max_entries: int = Field(default=500, ge=1)
+    github_max_retries: int = Field(default=2, ge=0, le=5)
+    github_retry_base_delay_seconds: float = Field(default=0.25, ge=0, le=10)
+    github_retry_max_delay_seconds: float = Field(default=2.0, ge=0, le=30)
+    circuit_breaker_enabled: bool = True
+    circuit_breaker_failure_threshold: int = Field(default=5, ge=1)
+    circuit_breaker_reset_timeout_seconds: float = Field(default=30.0, gt=0)
+    circuit_breaker_half_open_max_calls: int = Field(default=1, ge=1)
 
     @field_validator("backend_port", mode="before")
     @classmethod

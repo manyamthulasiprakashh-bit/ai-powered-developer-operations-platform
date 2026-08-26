@@ -44,7 +44,10 @@ class AsyncTTLCache:
     async def get_or_set(self, key: str, loader: Callable[[], Awaitable[Any]]) -> Any:
         if not self.enabled:
             return await loader()
-        cached = await self.get(key)
+        try:
+            cached = await self.get(key)
+        except Exception:
+            return await loader()
         if cached is not None:
             return cached
         if key not in self._locks and len(self._locks) >= self.max_entries:
@@ -52,11 +55,17 @@ class AsyncTTLCache:
         else:
             lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
-            cached = await self.get(key)
+            try:
+                cached = await self.get(key)
+            except Exception:
+                cached = None
             if cached is not None:
                 return cached
             value = await loader()
-            await self.set(key, value)
+            try:
+                await self.set(key, value)
+            except Exception:
+                pass
             return value
 
     def clear(self) -> None:

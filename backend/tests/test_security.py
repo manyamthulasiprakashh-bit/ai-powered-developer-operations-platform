@@ -18,6 +18,18 @@ def test_security_headers_are_present_on_health_response():
     assert "Strict-Transport-Security" not in response.headers
 
 
+def test_request_id_is_generated_and_supplied_id_is_preserved(caplog):
+    client = TestClient(app)
+
+    with caplog.at_level("INFO"):
+        generated = client.get("/api/health")
+        supplied = client.get("/api/health", headers={"X-Request-ID": "test-request-123"})
+
+    assert len(generated.headers["X-Request-ID"]) > 10
+    assert supplied.headers["X-Request-ID"] == "test-request-123"
+    assert any("request_id=test-request-123" in record.message for record in caplog.records)
+
+
 def test_cors_allows_configured_origin_and_rejects_other_origins():
     client = TestClient(app)
 
@@ -96,4 +108,6 @@ def test_upstream_error_response_does_not_expose_exception_detail():
 
     assert response.status_code == 502
     assert "super-secret" not in response.text
-    assert response.json() == {"detail": "GitHub service unavailable."}
+    assert response.json()["detail"] == "GitHub service unavailable."
+    assert response.json()["error"] == "upstream_unavailable"
+    assert response.json()["retryable"] is True
