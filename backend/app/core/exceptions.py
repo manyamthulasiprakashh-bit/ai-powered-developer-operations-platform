@@ -30,5 +30,5 @@ class GitHubNotFoundError(NotFoundError, GitHubServiceError):
     """Raised when a GitHub repository cannot be found."""
 
 
-class GitHubTimeoutError(GitHubServiceError):
+class GitHubTimeoutError(GitHubServiceError, TimeoutError):
     """Raised when a GitHub API request times out."""

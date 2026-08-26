@@ -2,7 +2,12 @@ import { API_BASE_URL } from '../config';
 import type { Commit, Issue, PullRequest, Repository, RepositoryContent } from '../types';
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { headers: { 'Content-Type': 'application/json' } });
+  const response = await fetch(url, {
+    headers: {
+      'Content-Type': 'application/json',
+      'bypass-tunnel-reminder': 'true',
+    },
+  });
 
   if (!response.ok) {
     let message = 'Unable to connect to the backend.';

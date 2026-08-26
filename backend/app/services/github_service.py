@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from pydantic import ValidationError as PydanticValidationError
+
 from app.core.exceptions import (
     GitHubAuthError,
     GitHubNotFoundError,
@@ -97,24 +99,48 @@ class GitHubService:
             raise
         except GitHubTimeoutError:
             raise
+        except TimeoutError as exc:
+            raise GitHubTimeoutError("GitHub request timed out.") from exc
+        except (PydanticValidationError, TypeError, AttributeError) as exc:
+            raise GitHubServiceError("GitHub returned invalid data.") from exc
         except GitHubServiceError as exc:
             raise GitHubServiceError(str(exc)) from exc
 
     def get_commits(self, owner: str, repo: str, page: int = 1, per_page: int = 30) -> list[CommitSummary]:
-        payload = self.client.get_commits(owner, repo, page=page, per_page=per_page)
-        return [self._normalize_commit(item) for item in payload]
+        try:
+            payload = self.client.get_commits(owner, repo, page=page, per_page=per_page)
+            return [self._normalize_commit(item) for item in payload]
+        except TimeoutError as exc:
+            raise GitHubTimeoutError("GitHub request timed out.") from exc
+        except (PydanticValidationError, TypeError, AttributeError) as exc:
+            raise GitHubServiceError("GitHub returned invalid data.") from exc
 
     def get_pull_requests(self, owner: str, repo: str, state: str = "open", page: int = 1, per_page: int = 30) -> list[PullRequestSummary]:
-        payload = self.client.get_pull_requests(owner, repo, state=state, page=page, per_page=per_page)
-        return [self._normalize_pull_request(item) for item in payload]
+        try:
+            payload = self.client.get_pull_requests(owner, repo, state=state, page=page, per_page=per_page)
+            return [self._normalize_pull_request(item) for item in payload]
+        except TimeoutError as exc:
+            raise GitHubTimeoutError("GitHub request timed out.") from exc
+        except (PydanticValidationError, TypeError, AttributeError) as exc:
+            raise GitHubServiceError("GitHub returned invalid data.") from exc
 
     def get_issues(self, owner: str, repo: str, state: str = "open", page: int = 1, per_page: int = 30) -> list[IssueSummary]:
-        payload = self.client.get_issues(owner, repo, state=state, page=page, per_page=per_page)
-        filtered = [item for item in payload if item.get("pull_request") is None]
-        return [self._normalize_issue(item) for item in filtered]
+        try:
+            payload = self.client.get_issues(owner, repo, state=state, page=page, per_page=per_page)
+            filtered = [item for item in payload if item.get("pull_request") is None]
+            return [self._normalize_issue(item) for item in filtered]
+        except TimeoutError as exc:
+            raise GitHubTimeoutError("GitHub request timed out.") from exc
+        except (PydanticValidationError, TypeError, AttributeError) as exc:
+            raise GitHubServiceError("GitHub returned invalid data.") from exc
 
     def get_contents(self, owner: str, repo: str, path: str = "", page: int = 1, per_page: int = 30):
-        payload = self.client.get_contents(owner, repo, path=path, page=page, per_page=per_page)
-        if isinstance(payload, list):
-            return [self._normalize_content(item) for item in payload]
-        return self._normalize_content(payload)
+        try:
+            payload = self.client.get_contents(owner, repo, path=path, page=page, per_page=per_page)
+            if isinstance(payload, list):
+                return [self._normalize_content(item) for item in payload]
+            return self._normalize_content(payload)
+        except TimeoutError as exc:
+            raise GitHubTimeoutError("GitHub request timed out.") from exc
+        except (PydanticValidationError, TypeError, AttributeError) as exc:
+            raise GitHubServiceError("GitHub returned invalid data.") from exc

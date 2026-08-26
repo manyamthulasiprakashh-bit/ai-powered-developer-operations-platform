@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.routes.github import get_github_service
-from app.core.exceptions import GitHubAuthError, GitHubNotFoundError, GitHubRateLimitError
+from app.core.exceptions import GitHubAuthError, GitHubNotFoundError, GitHubRateLimitError, GitHubServiceError
 from app.integrations.github.client import GitHubClient
 from app.main import app
 from app.services.github_service import GitHubService
@@ -92,6 +92,11 @@ class TimeoutClient:
         raise TimeoutError("GitHub request timed out.")
 
 
+class InvalidResponseClient:
+    def get_repository(self, owner, repo):
+        return {"unexpected": "shape"}
+
+
 def test_github_client_uses_default_api_url():
     client = GitHubClient()
 
@@ -137,6 +142,13 @@ def test_repository_service_raises_timeout():
         service.get_repository("owner", "repo")
 
 
+def test_repository_service_rejects_invalid_github_response():
+    service = GitHubService(client=InvalidResponseClient())
+
+    with pytest.raises(GitHubServiceError, match="GitHub returned invalid data"):
+        service.get_repository("owner", "repo")
+
+
 def test_commits_endpoint_returns_paginated_data():
     app.dependency_overrides[get_github_service] = lambda: GitHubService(client=FakeClient())
     client = TestClient(app)
@@ -156,6 +168,30 @@ def test_pull_requests_endpoint_returns_data():
 
     assert response.status_code == 200
     assert response.json()[0]["title"] == "Add feature"
+    app.dependency_overrides.clear()
+
+
+def test_repository_endpoint_maps_timeout_to_gateway_timeout():
+    app.dependency_overrides[get_github_service] = lambda: GitHubService(client=TimeoutClient())
+
+    response = TestClient(app).get("/api/github/repositories/owner/repo")
+
+    assert response.status_code == 504
+    assert response.json() == {"detail": "GitHub request timed out."}
+    app.dependency_overrides.clear()
+
+
+def test_commits_endpoint_maps_rate_limit_to_too_many_requests():
+    class RateLimitedCommitsClient(FakeClient):
+        def get_commits(self, owner, repo, page=1, per_page=30):
+            raise GitHubRateLimitError("GitHub API rate limit exceeded. Please try again later.")
+
+    app.dependency_overrides[get_github_service] = lambda: GitHubService(client=RateLimitedCommitsClient())
+
+    response = TestClient(app).get("/api/github/repositories/owner/repo/commits")
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == "GitHub API rate limit exceeded. Please try again later."
     app.dependency_overrides.clear()
 
 

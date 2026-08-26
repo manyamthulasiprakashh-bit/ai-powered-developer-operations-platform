@@ -6,6 +6,10 @@
 
 Returns a lightweight status payload used for monitoring and Docker health checks.
 
+- GET /api/ready
+
+Returns deterministic configuration readiness. It does not make a GitHub request or claim PostgreSQL availability because the current API does not use the database at request time.
+
 ## Future endpoints
 
 The project is structured for the following API surface in later phases:

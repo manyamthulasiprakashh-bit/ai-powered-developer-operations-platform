@@ -108,3 +108,35 @@ npm run build
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)
 - [docs/development.md](docs/development.md)
+
+## V2 - Infrastructure & DevOps
+
+### Architecture
+
+The React/Vite frontend calls a FastAPI backend, which normalizes data from the configurable GitHub REST API. Docker Compose provides a local backend, frontend, and PostgreSQL service; the current API does not yet use PostgreSQL in request handling.
+
+### Local development
+
+Copy `.env.example` to `.env`, then run `docker compose up --build`, or start the backend and frontend separately using the commands above. The local defaults are intentionally development values.
+
+### Production deployment
+
+No deployment is performed or claimed by this repository. A deployment must provide `PORT`, set `APP_ENV=production` and `APP_DEBUG=false`, configure `CORS_ALLOWED_ORIGINS` and `VITE_API_BASE_URL` with real service origins, and provide secrets through the platform secret store. Do not use the local PostgreSQL password in production.
+
+### Health, readiness, and logging
+
+- `GET /api/health` is a lightweight process health response and does not call GitHub.
+- `GET /api/ready` is a deterministic configuration-readiness response. PostgreSQL is not reported as a live dependency because the current API does not access it.
+- Backend logs use consistent timestamped levels and include method, path, status, and duration. Tokens, authorization headers, and request bodies are not logged.
+
+### Error handling
+
+GitHub timeouts return `504`, rate limits return `429`, authentication failures return `401`, missing resources return `404`, upstream service failures return `502`, and malformed query parameters return `422`. Unexpected failures return a safe `500` message without a stack trace in the response. The frontend consumes the JSON `detail` field when available.
+
+### Docker and CI
+
+The backend container runs Uvicorn on the platform `PORT` as a non-root user. The frontend image builds the static Vite bundle and serves it with Nginx. Compose remains a local development setup and uses an explicitly development-only database default. GitHub Actions runs backend tests plus frontend lint/type validation and a production build on pushes and pull requests; it does not deploy.
+
+### Known limitations
+
+PostgreSQL migrations and runtime persistence are not implemented, GitHub calls are synchronous and uncached, there is no metrics/tracing platform, and Docker/CI execution has not been verified in this environment where Docker is unavailable.

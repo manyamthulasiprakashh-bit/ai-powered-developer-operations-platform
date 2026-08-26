@@ -14,6 +14,24 @@ def test_health_endpoint():
     assert "service" in response.json()
 
 
+def test_readiness_endpoint_is_deterministic():
+    response = TestClient(app).get("/api/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "ready",
+        "service": "ai-devops-platform",
+        "checks": {"configuration": "ok"},
+    }
+
+
+def test_invalid_pagination_returns_safe_validation_error():
+    response = TestClient(app).get("/api/github/repositories/owner/repo/commits?page=0")
+
+    assert response.status_code == 422
+    assert response.json() == {"detail": "Invalid request parameters."}
+
+
 def test_platform_config_reads_port_and_cors_origins(monkeypatch):
     monkeypatch.setenv("PORT", "9090")
     monkeypatch.setenv("CORS_ALLOWED_ORIGINS", "https://frontend.example.com,https://admin.example.com")

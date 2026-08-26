@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     github_token: str | None = Field(default=None)
     openai_api_key: str | None = Field(default=None)
     openai_model: str = Field(default="gpt-4o-mini")
-    cors_allowed_origins: list[str] = Field(
+    cors_allowed_origins: str | list[str] = Field(
         default_factory=lambda: ["http://localhost:5173", "http://127.0.0.1:5173"],
         validation_alias=AliasChoices("CORS_ALLOWED_ORIGINS", "CORS_ORIGINS"),
     )
