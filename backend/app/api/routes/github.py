@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 
 from app.core.exceptions import (
     GitHubAuthError,
@@ -15,6 +15,9 @@ from app.services.github_service import GitHubService
 
 router = APIRouter(prefix="/api/github", tags=["GitHub"])
 
+RepositoryPart = Annotated[str, Path(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_.-]+$")]
+ContentPath = Annotated[str, Query(max_length=512)]
+
 
 def get_github_service() -> GitHubService:
     return GitHubService()
@@ -26,8 +29,8 @@ def get_github_service() -> GitHubService:
     description="Retrieve summary data for a GitHub repository.",
 )
 def get_repository(
-    owner: str,
-    repo: str,
+    owner: RepositoryPart,
+    repo: RepositoryPart,
     service: Annotated[GitHubService, Depends(get_github_service)],
 ):
     try:
@@ -50,8 +53,8 @@ def get_repository(
     description="Retrieve recent commits with pagination support.",
 )
 def get_commits(
-    owner: str,
-    repo: str,
+    owner: RepositoryPart,
+    repo: RepositoryPart,
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=100)] = 30,
     service: Annotated[GitHubService, Depends(get_github_service)] = None,
@@ -77,8 +80,8 @@ def get_commits(
     description="Retrieve pull requests for the repository, filtered by state.",
 )
 def get_pull_requests(
-    owner: str,
-    repo: str,
+    owner: RepositoryPart,
+    repo: RepositoryPart,
     state: Literal["open", "closed", "all"] = "open",
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=100)] = 30,
@@ -105,8 +108,8 @@ def get_pull_requests(
     description="Retrieve issues while excluding pull requests from the list.",
 )
 def get_issues(
-    owner: str,
-    repo: str,
+    owner: RepositoryPart,
+    repo: RepositoryPart,
     state: Literal["open", "closed", "all"] = "open",
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=100)] = 30,
@@ -133,13 +136,15 @@ def get_issues(
     description="List contents for the repository root or a specific path with a safe page limit.",
 )
 def get_contents(
-    owner: str,
-    repo: str,
-    path: str = "",
+    owner: RepositoryPart,
+    repo: RepositoryPart,
+    path: ContentPath = "",
     page: Annotated[int, Query(ge=1)] = 1,
     per_page: Annotated[int, Query(ge=1, le=50)] = 30,
     service: Annotated[GitHubService, Depends(get_github_service)] = None,
 ):
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid repository path.")
     try:
         contents = service.get_contents(owner, repo, path=path, page=page, per_page=per_page)
         if isinstance(contents, list):

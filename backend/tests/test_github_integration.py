@@ -186,6 +186,7 @@ def test_commits_endpoint_maps_rate_limit_to_too_many_requests():
         def get_commits(self, owner, repo, page=1, per_page=30):
             raise GitHubRateLimitError("GitHub API rate limit exceeded. Please try again later.")
 
+    app.state.rate_limiter.reset()
     app.dependency_overrides[get_github_service] = lambda: GitHubService(client=RateLimitedCommitsClient())
 
     response = TestClient(app).get("/api/github/repositories/owner/repo/commits")

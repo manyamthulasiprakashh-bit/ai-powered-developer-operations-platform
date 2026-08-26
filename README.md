@@ -140,3 +140,9 @@ The backend container runs Uvicorn on the platform `PORT` as a non-root user. Th
 ### Known limitations
 
 PostgreSQL migrations and runtime persistence are not implemented, GitHub calls are synchronous and uncached, there is no metrics/tracing platform, and Docker/CI execution has not been verified in this environment where Docker is unavailable.
+
+## V3 - Security & Compliance Hardening
+
+V3 adds environment-validated production CORS, security response headers, configurable process-local rate limiting, bounded and traversal-safe inputs, secret-safe error responses, reusable log redaction, non-root frontend serving, and dependency audit steps in CI. Current read-only endpoints remain public; authentication is intentionally a future boundary rather than an invented user system.
+
+See [docs/security.md](docs/security.md) for the threat model, implemented controls, compliance-oriented design, and known limitations. This is security hardening, not a compliance certification or production security audit.
