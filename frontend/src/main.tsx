@@ -19,10 +19,10 @@ function DashboardPage({ onNavigate }: { onNavigate: (path: string) => void }) {
 
         <section className="grid gap-4 md:grid-cols-4">
           {[
-            ['Connected repositories', '1'],
-            ['Total analyses', '0'],
-            ['Detected issues', '0'],
-            ['Critical issues', '0'],
+            ['Repository connection', 'Connected'],
+            ['Analysis history', 'Not persisted'],
+            ['Detected issues', 'Run analysis'],
+            ['Critical issues', 'Run analysis'],
           ].map(([label, value]) => (
             <div key={label} className="rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-lg shadow-slate-950/30">
               <p className="text-sm text-slate-400">{label}</p>
@@ -55,8 +55,8 @@ function DashboardPage({ onNavigate }: { onNavigate: (path: string) => void }) {
             <h2 className="mb-4 text-xl font-semibold">System health</h2>
             <ul className="space-y-3 text-sm text-slate-300">
               <li className="flex items-center justify-between border-b border-slate-800 pb-2"><span>API</span><span className="text-emerald-400">Healthy</span></li>
-              <li className="flex items-center justify-between border-b border-slate-800 pb-2"><span>Database</span><span className="text-yellow-400">Pending</span></li>
-              <li className="flex items-center justify-between"><span>AI service</span><span className="text-slate-400">Not configured</span></li>
+              <li className="flex items-center justify-between border-b border-slate-800 pb-2"><span>Database</span><span className="text-slate-400">Not configured</span></li>
+              <li className="flex items-center justify-between"><span>AI service</span><span className="text-slate-400">Optional / not configured</span></li>
             </ul>
           </div>
         </section>

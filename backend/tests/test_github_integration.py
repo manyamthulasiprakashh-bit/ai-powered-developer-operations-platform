@@ -97,6 +97,30 @@ class InvalidResponseClient:
         return {"unexpected": "shape"}
 
 
+class EmptyActivityClient(FakeClient):
+    def get_commits(self, owner, repo, page=1, per_page=30):
+        return []
+
+    def get_issues(self, owner, repo, state="open", page=1, per_page=30):
+        return []
+
+    def get_pull_requests(self, owner, repo, state="open", page=1, per_page=30):
+        return []
+
+    def get_contents(self, owner, repo, path="", page=1, per_page=30):
+        return []
+
+
+class AnalysisNotFoundClient(EmptyActivityClient):
+    def get_repository(self, owner, repo):
+        raise GitHubNotFoundError(f"GitHub repository '{owner}/{repo}' was not found.")
+
+
+class AnalysisFailureClient(EmptyActivityClient):
+    def get_repository(self, owner, repo):
+        raise GitHubServiceError("GitHub request failed.")
+
+
 def test_github_client_uses_default_api_url():
     client = GitHubClient()
 
@@ -268,4 +292,53 @@ def test_repository_not_found_returns_404():
 
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
+    app.dependency_overrides.clear()
+
+
+def test_analysis_endpoint_returns_schema_and_activity_metrics():
+    app.dependency_overrides[get_github_service] = lambda: GitHubService(client=FakeClient())
+
+    response = TestClient(app).post("/api/github/repositories/microsoft/vscode/analysis")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["owner"] == "microsoft"
+    assert payload["repository"] == "vscode"
+    assert payload["metrics"] == {
+        "commit_count": 1,
+        "open_issue_count": 1,
+        "open_pull_request_count": 1,
+        "root_content_count": 1,
+        "has_readme": True,
+        "has_ci_configuration": False,
+    }
+    assert payload["findings"]
+    assert {"title", "description", "severity", "category", "evidence"} <= payload["findings"][0].keys()
+    assert payload["analyzed_at"]
+    app.dependency_overrides.clear()
+
+
+def test_analysis_endpoint_handles_empty_activity():
+    app.dependency_overrides[get_github_service] = lambda: GitHubService(client=EmptyActivityClient())
+
+    response = TestClient(app).post("/api/github/repositories/owner/repo/analysis")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["metrics"]["commit_count"] == 0
+    assert payload["metrics"]["open_issue_count"] == 0
+    assert payload["metrics"]["open_pull_request_count"] == 0
+    assert any(finding["severity"] == "HIGH" for finding in payload["findings"])
+    app.dependency_overrides.clear()
+
+
+def test_analysis_endpoint_maps_not_found_and_github_failure():
+    app.dependency_overrides[get_github_service] = lambda: GitHubService(client=AnalysisNotFoundClient())
+    not_found = TestClient(app).post("/api/github/repositories/owner/repo/analysis")
+    assert not_found.status_code == 404
+
+    app.dependency_overrides[get_github_service] = lambda: GitHubService(client=AnalysisFailureClient())
+    failure = TestClient(app).post("/api/github/repositories/owner/repo/analysis")
+    assert failure.status_code == 502
+    assert failure.json()["detail"] == "GitHub service unavailable."
     app.dependency_overrides.clear()

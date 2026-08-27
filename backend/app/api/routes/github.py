@@ -14,6 +14,8 @@ from app.core.exceptions import (
     GitHubTimeoutError,
 )
 from app.core.config import get_settings
+from app.schemas.analysis import RepositoryAnalysisResponse
+from app.services.analysis_service import RepositoryAnalysisService
 from app.services.github_service import GitHubService
 
 router = APIRouter(prefix="/api/github", tags=["GitHub"])
@@ -28,6 +30,12 @@ def get_github_service() -> GitHubService:
     return GitHubService()
 
 
+def get_analysis_service(
+    service: Annotated[GitHubService, Depends(get_github_service)],
+) -> RepositoryAnalysisService:
+    return RepositoryAnalysisService(service)
+
+
 @router.get(
     "/repositories/{owner}/{repo}",
     summary="Get repository metadata",
@@ -40,6 +48,33 @@ async def get_repository(
 ):
     try:
         return (await service.get_repository_async(owner, repo)).model_dump(mode="json")
+    except GitHubNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except GitHubAuthError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except GitHubRateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
+    except GitHubTimeoutError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
+    except GitHubCircuitOpenError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except GitHubServiceError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@router.post(
+    "/repositories/{owner}/{repo}/analysis",
+    response_model=RepositoryAnalysisResponse,
+    summary="Analyze a repository",
+    description="Run deterministic V1 analysis using repository data retrieved from GitHub.",
+)
+async def analyze_repository(
+    owner: RepositoryPart,
+    repo: RepositoryPart,
+    service: Annotated[RepositoryAnalysisService, Depends(get_analysis_service)],
+):
+    try:
+        return await service.analyze(owner, repo)
     except GitHubNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except GitHubAuthError as exc:

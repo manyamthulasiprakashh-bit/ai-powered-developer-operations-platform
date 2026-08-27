@@ -55,11 +55,18 @@ cp .env.example .env
 Required variables for production deployment:
 
 - `PORT`: platform-provided backend port; the app listens on this value in production
+- `APP_ENV=production` and `APP_DEBUG=false`
 - `CORS_ALLOWED_ORIGINS`: comma-separated allowed frontend origins for browser access
 - `GITHUB_API_URL`: optional override for the GitHub API endpoint; defaults to `https://api.github.com`
 - `GITHUB_TOKEN`: optional GitHub token for higher rate limits; keep it out of source control
 - `DATABASE_URL`: required when the app is connected to Postgres
 - `VITE_API_BASE_URL`: frontend API base URL used for deployed backend requests
+
+For the current Render services, set `CORS_ALLOWED_ORIGINS` to exactly
+`https://ai-powered-developer-operations-platform.onrender.com` and set the
+frontend build variable `VITE_API_BASE_URL` to exactly
+`https://ai-powered-developer-operations-backend.onrender.com`. See
+[docs/development.md](docs/development.md) for service roots and smoke tests.
 
 Never hardcode secrets or tokens in the repository. Keep values in the deployment platform's environment settings.
 
@@ -88,6 +95,12 @@ Core endpoints:
 - `GET /api/github/repositories/{owner}/{repo}/pull-requests` — pull requests
 - `GET /api/github/repositories/{owner}/{repo}/issues` — repository issues
 - `GET /api/github/repositories/{owner}/{repo}/contents` — repository contents
+- `POST /api/github/repositories/{owner}/{repo}/analysis` — deterministic V1 repository analysis
+
+V1 analysis uses the existing GitHub REST integration to calculate repository
+activity and maintenance indicators. It does not require OpenAI, does not claim
+to be AI-powered, and does not persist results. PostgreSQL is not used during
+request handling; `OPENAI_API_KEY` and `DATABASE_URL` remain optional settings.
 
 FastAPI also exposes interactive docs at `/docs` and `/redoc`.
 

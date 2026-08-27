@@ -1,8 +1,9 @@
 import { API_BASE_URL } from '../config';
-import type { Commit, Issue, PullRequest, Repository, RepositoryContent } from '../types';
+import type { Commit, Issue, PullRequest, Repository, RepositoryAnalysis, RepositoryContent } from '../types';
 
-async function fetchJson<T>(url: string): Promise<T> {
+async function fetchJson<T>(url: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
+    ...init,
     headers: {
       'Content-Type': 'application/json',
       'bypass-tunnel-reminder': 'true',
@@ -70,4 +71,9 @@ export async function getContents(
 ): Promise<RepositoryContent[]> {
   const url = `${API_BASE_URL}/api/github/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents?page=${page}&per_page=${perPage}`;
   return fetchJson<RepositoryContent[]>(url);
+}
+
+export async function analyzeRepository(owner: string, repo: string): Promise<RepositoryAnalysis> {
+  const url = `${API_BASE_URL}/api/github/repositories/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/analysis`;
+  return fetchJson<RepositoryAnalysis>(url, { method: 'POST' });
 }

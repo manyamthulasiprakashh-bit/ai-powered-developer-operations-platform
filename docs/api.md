@@ -10,6 +10,15 @@ Returns a lightweight status payload used for monitoring and Docker health check
 
 Returns deterministic configuration readiness. It does not make a GitHub request or claim PostgreSQL availability because the current API does not use the database at request time.
 
+## Repository analysis
+
+- POST /api/github/repositories/{owner}/{repo}/analysis
+
+Runs deterministic V1 analysis against repository metadata, recent commits,
+open issues, open pull requests, and root contents retrieved from GitHub. The
+response includes metrics and findings with severity, category, and evidence.
+Results are returned for the current request only and are not persisted.
+
 ## Future endpoints
 
 The project is structured for the following API surface in later phases:

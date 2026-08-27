@@ -53,3 +53,29 @@ export interface RepositoryContent {
   size: number | null;
   url: string | null;
 }
+
+export type AnalysisSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO';
+
+export interface AnalysisFinding {
+  title: string;
+  description: string;
+  severity: AnalysisSeverity;
+  category: string;
+  evidence: string;
+}
+
+export interface RepositoryAnalysis {
+  owner: string;
+  repository: string;
+  analyzed_at: string;
+  summary: string;
+  metrics: {
+    commit_count: number;
+    open_issue_count: number;
+    open_pull_request_count: number;
+    root_content_count: number;
+    has_readme: boolean;
+    has_ci_configuration: boolean;
+  };
+  findings: AnalysisFinding[];
+}

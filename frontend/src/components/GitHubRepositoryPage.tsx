@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { getCommits, getContents, getIssues, getPullRequests, getRepository } from '../services/github';
-import type { Commit, Issue, PullRequest, Repository, RepositoryContent } from '../types';
+import { analyzeRepository, getCommits, getContents, getIssues, getPullRequests, getRepository } from '../services/github';
+import type { AnalysisSeverity, Commit, Issue, PullRequest, Repository, RepositoryAnalysis, RepositoryContent } from '../types';
 
 interface GitHubRepositoryPageProps {
   owner?: string;
@@ -270,6 +270,52 @@ function ContentList({ contents }: { contents: RepositoryContent[] }) {
   );
 }
 
+const severityStyles: Record<AnalysisSeverity, string> = {
+  CRITICAL: 'border-rose-500/50 bg-rose-500/10 text-rose-300',
+  HIGH: 'border-orange-500/50 bg-orange-500/10 text-orange-300',
+  MEDIUM: 'border-yellow-500/50 bg-yellow-500/10 text-yellow-300',
+  LOW: 'border-cyan-500/50 bg-cyan-500/10 text-cyan-300',
+  INFO: 'border-slate-700 bg-slate-900 text-slate-300',
+};
+
+function AnalysisResults({ analysis }: { analysis: RepositoryAnalysis }) {
+  const metrics = [
+    ['Commits', analysis.metrics.commit_count],
+    ['Open issues', analysis.metrics.open_issue_count],
+    ['Open pull requests', analysis.metrics.open_pull_request_count],
+    ['Root items', analysis.metrics.root_content_count],
+  ];
+
+  return (
+    <SectionCard title="Repository analysis">
+      <p className="text-sm text-slate-200">{analysis.summary}</p>
+      <p className="mt-1 text-xs text-slate-400">Analyzed {formatDate(analysis.analyzed_at)}</p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {metrics.map(([label, value]) => (
+          <div key={label} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
+            <p className="text-xs text-slate-400">{label}</p>
+            <p className="mt-1 text-xl font-semibold text-white">{value}</p>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 space-y-3">
+        {analysis.findings.map((finding) => (
+          <div key={`${finding.category}-${finding.title}`} className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h4 className="font-medium text-slate-100">{finding.title}</h4>
+              <span className={`rounded-full border px-2 py-1 text-xs font-medium ${severityStyles[finding.severity]}`}>
+                {finding.severity}
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-slate-300">{finding.description}</p>
+            <p className="mt-2 text-xs text-slate-500">{finding.category}: {finding.evidence}</p>
+          </div>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}
+
 export function GitHubRepositoryPage({ owner, repo, onNavigate }: GitHubRepositoryPageProps) {
   const [ownerInput, setOwnerInput] = useState(owner ?? '');
   const [repoInput, setRepoInput] = useState(repo ?? '');
@@ -281,7 +327,10 @@ export function GitHubRepositoryPage({ owner, repo, onNavigate }: GitHubReposito
   const [issueState, setIssueState] = useState<'open' | 'closed' | 'all'>(defaultIssueState);
   const [prState, setPrState] = useState<'open' | 'closed' | 'all'>(defaultPullRequestState);
   const [isLoading, setIsLoading] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysis, setAnalysis] = useState<RepositoryAnalysis | null>(null);
   const [error, setError] = useState('');
+  const [analysisError, setAnalysisError] = useState('');
   const requestSequence = useRef(0);
 
   const repositoryId = useMemo(() => `${(owner ?? '').trim()}/${(repo ?? '').trim()}`.trim(), [owner, repo]);
@@ -348,6 +397,23 @@ export function GitHubRepositoryPage({ owner, repo, onNavigate }: GitHubReposito
     onNavigate(`/repositories/${trimmedOwner}/${trimmedRepo}`);
   };
 
+  const handleAnalysis = async () => {
+    const trimmedOwner = (owner ?? '').trim();
+    const trimmedRepo = (repo ?? '').trim();
+    if (!trimmedOwner || !trimmedRepo) return;
+
+    setIsAnalyzing(true);
+    setAnalysisError('');
+    try {
+      setAnalysis(await analyzeRepository(trimmedOwner, trimmedRepo));
+    } catch (analysisLoadError) {
+      const message = analysisLoadError instanceof Error ? analysisLoadError.message : 'Repository analysis failed.';
+      setAnalysisError(`Repository analysis failed: ${message}`);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <form onSubmit={handleSubmit} className="rounded-xl border border-slate-800 bg-slate-900 p-5 shadow-lg shadow-slate-950/30">
@@ -405,6 +471,24 @@ export function GitHubRepositoryPage({ owner, repo, onNavigate }: GitHubReposito
       {!isLoading && repository ? (
         <>
           <RepositoryHeader repository={repository} />
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={handleAnalysis}
+              disabled={isAnalyzing}
+              className="rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-medium text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isAnalyzing ? 'Analyzing...' : 'Run Analysis'}
+            </button>
+            {analysis ? <span className="text-sm text-emerald-300">Analysis completed</span> : null}
+          </div>
+          {analysisError ? (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200">{analysisError}</div>
+          ) : null}
+          {isAnalyzing ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-900 p-6 text-sm text-slate-300">Analyzing repository...</div>
+          ) : null}
+          {!isAnalyzing && analysis ? <AnalysisResults analysis={analysis} /> : null}
           <RepositoryStats repository={repository} />
           <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
             <div className="space-y-6">
