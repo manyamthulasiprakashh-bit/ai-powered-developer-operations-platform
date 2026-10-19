@@ -61,7 +61,15 @@ docker compose up --build
 ```
 
 The frontend proxy is served at `http://localhost:5173` behind owner Basic Auth.
-The backend and database publish no host ports.
+The backend and database publish no host ports. Docker Compose v2.24.0 or newer
+is required because the Compose file uses the `env_file` `required:` mapping.
+`POSTGRES_PASSWORD` (not `DATABASE_URL` alone) controls the Compose PostgreSQL
+password, and PostgreSQL data lives in the named `db_data` volume, so
+`docker compose down` keeps it while `docker compose down -v` deletes it (see
+[Database data persistence](#database-data-persistence-compose)). The Compose
+demo pins the backend to port 8000 (both `PORT` and the legacy `BACKEND_PORT`
+alias), matching the backend healthcheck and the Nginx upstream; changing the port
+requires updating all of them together.
 
 ## Environment Variables
 
@@ -344,6 +352,30 @@ default password; production deployments must supply real credentials through th
 platform secret store. Never commit real credentials, and never use the local
 development password in production.
 
+`POSTGRES_PASSWORD` controls the Compose PostgreSQL password. The `db` service and
+both application services derive their connection URL from that value, so changing
+`DATABASE_URL` in `.env` alone does not change the Compose database password.
+
+### Database data persistence (Compose)
+
+The Compose `db` service stores PostgreSQL data in the named `db_data` volume,
+mounted at `/var/lib/postgresql/data`:
+
+- `docker compose stop` and `docker compose start` keep the containers and data.
+- `docker compose down` removes the containers but keeps the named volume, so the
+  data is preserved for the next `docker compose up`.
+- `docker compose down -v` (or `docker compose down --volumes`) removes the named
+  volume and deletes all database data. Treat it as destructive.
+- Recreating the `db` container (for example after a Compose change) remounts the
+  same named volume, so committed data survives; `docker compose down` is not
+  required to pick up configuration changes.
+
+Data-migration note: adding this volume to a stack whose `db` container already
+holds unbacked-up data causes Compose to recreate the container. A new empty named
+volume is initialized from the image, not from the removed container's writable
+layer, so take a `pg_dump` backup (or otherwise preserve the old volume) before
+the first `docker compose up` if that data matters.
+
 ### Docker Compose migration service and ordering
 
 Compose defines a one-shot `migrate` service that runs `alembic upgrade head`
@@ -438,19 +470,30 @@ server-side, behind an owner Basic Auth gate.
   frontend Nginx entrypoint accepts only `[A-Za-z0-9_-]` with a length of 16-128
   characters because the value is injected into its config. Never put it in
   `VITE_*`, frontend code, browser storage, or responses.
-- Owner Basic Auth credential: a single `user:password-hash` line mounted
-  read-only at `/etc/nginx/auth/htpasswd`. Generate it outside the image and do
-  not commit it. The Nginx image does not ship `htpasswd`, so use a host tool:
+- Owner Basic Auth credential: a single `user:hash` line mounted read-only at
+  `/etc/nginx/auth/htpasswd` (the examples use the username `owner`). Generate it
+  outside the image and do not commit it. The Nginx image does not ship
+  `htpasswd`, so use a host tool:
 
   ```bash
   mkdir -p secrets
-  openssl passwd -apr1 'your-owner-password' > secrets/htpasswd   # password hash only
-  # or, if installed: htpasswd -c -B secrets/htpasswd owner
+  htpasswd -c -m secrets/htpasswd owner      # prompts for the owner password
   ```
 
-  `secrets/` is gitignored. The frontend container refuses to start (fail-fast)
-  when `API_KEY` is missing, unsafe, or out of range, or when the htpasswd path
-  is missing, a directory, unreadable, empty, or lacks a `user:hash` line.
+  `-m` writes an apr1 hash that the Alpine Nginx image accepts. `htpasswd -c -B`
+  writes bcrypt, which the musl-based image may reject, so prefer `-m`. If
+  `htpasswd` is unavailable, use OpenSSL, but note that `openssl passwd` emits the
+  hash only; prefix the username yourself to produce the required `user:hash`
+  line:
+
+  ```bash
+  printf 'owner:%s\n' "$(openssl passwd -apr1 'your-owner-password')" > secrets/htpasswd
+  ```
+
+  `secrets/` is gitignored and must stay out of version control. The frontend
+  container refuses to start (fail-fast) when `API_KEY` is missing, unsafe, or out
+  of range, or when the htpasswd path is missing, a directory, unreadable, empty,
+  or lacks a `user:hash` line.
 
 ### Security assumptions
 

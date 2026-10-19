@@ -29,7 +29,15 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-dev-only-password}@db:5432/devops_platform
-      PORT: ${BACKEND_PORT:-8000}
+      # The Compose demo pins the backend to 8000: the healthcheck below and the
+      # Nginx proxy upstream (frontend/nginx.conf.template) both target 8000. Both
+      # PORT and the legacy BACKEND_PORT alias (accepted by
+      # backend/app/core/config.py) are pinned so a stray value in .env cannot move
+      # the backend. Changing this port requires updating all four: PORT,
+      # BACKEND_PORT, the healthcheck URL, and the Nginx upstream. Non-Compose
+      # deployments still receive their own PORT from the hosting platform.
+      PORT: "8000"
+      BACKEND_PORT: "8000"
       # Only the frontend proxy may set forwarding headers. Must match the
       # frontend container's static address on the edge network.
       TRUSTED_PROXY_IPS: ${FRONTEND_PROXY_IP:-172.28.0.10}
@@ -38,6 +46,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    # Liveness probe used for Compose startup ordering. It targets the pinned
+    # port 8000 above (see the PORT comment); the Nginx upstream uses the same.
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health').read()"]
       interval: 10s
@@ -62,10 +72,11 @@ services:
       # assets, browser storage, or responses.
       API_KEY: ${API_KEY:-}
     volumes:
-      # Owner credential (bcrypt/apr1/crypt hash). Generate outside the image;
-      # never commit. See README and .env.example. The mounted file must be
-      # readable by uid 101 (the unprivileged nginx user), e.g. owned by uid 101
-      # or group 0 with mode 640; the entrypoint verifies this before starting.
+      # Owner credential as one `user:hash` line (e.g. `owner:$apr1$...`).
+      # Generate outside the image; never commit. See README and .env.example.
+      # The mounted file must be readable by uid 101 (the unprivileged nginx
+      # user), e.g. owned by uid 101 or group 0 with mode 640; the entrypoint
+      # verifies the format and readability before starting.
       - ./secrets/htpasswd:/etc/nginx/auth/htpasswd:ro
     depends_on:
       backend:
@@ -88,8 +99,16 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    # Named volume so PostgreSQL data survives `docker compose down` and
+    # container recreation. `docker compose down -v` deletes this volume and all
+    # database data. See README "Database data persistence".
+    volumes:
+      - db_data:/var/lib/postgresql/data
     networks:
       - data
+
+volumes:
+  db_data:
 
 networks:
   edge:

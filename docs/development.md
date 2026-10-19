@@ -6,7 +6,8 @@
 - Node.js 20 or newer and the frontend dependencies in `frontend/package.json`
 - PostgreSQL for persistence, readiness, analysis history/statistics, and the
   document workflow
-- Docker Compose for the same-origin proxy/Basic Auth workflow
+- Docker Compose v2.24.0 or newer for the same-origin proxy/Basic Auth workflow
+  (the Compose file uses the `env_file` `required:` mapping)
 
 Copy `.env.example` to `.env` and adjust values: use the repository root for
 Compose, or `backend/.env` for Uvicorn/Alembic commands run from `backend/`.
@@ -22,7 +23,9 @@ server-side behind owner Basic Auth.
 cp .env.example .env
 # Set a long random API_KEY in .env.
 mkdir -p secrets
-openssl passwd -apr1 'your-owner-password' > secrets/htpasswd
+htpasswd -c -m secrets/htpasswd owner      # prompts; writes owner:apr1-hash
+# OpenSSL alternative (emits the hash only, so prefix the username):
+# printf 'owner:%s\n' "$(openssl passwd -apr1 'your-owner-password')" > secrets/htpasswd
 
 docker compose up --build
 ```
@@ -85,6 +88,21 @@ server, Docker, or Nginx runtime behavior.
 ```bash
 docker compose up --build
 ```
+
+Docker Compose v2.24.0 or newer is required. The Compose demo pins the backend to
+port 8000: the backend healthcheck and the Nginx proxy upstream both target 8000.
+Compose sets both `PORT` and the legacy `BACKEND_PORT` alias (accepted by
+`backend/app/core/config.py`) to `8000` so a stray `.env` value cannot move the
+backend. Changing the port means updating both variables, the healthcheck URL, and
+the Nginx upstream together. Platform (non-Compose) deployments still use the
+platform-provided `PORT`.
+
+PostgreSQL data is stored in the named `db_data` volume: `docker compose down`
+removes the containers but preserves the volume and its data, while
+`docker compose down -v` deletes the volume and all database data.
+`POSTGRES_PASSWORD` controls the Compose database password; the Compose services
+build their connection URL from it, so changing `DATABASE_URL` in `.env` alone
+does not change the Compose database password.
 
 `docker compose config` and the full stack require Docker, which was unavailable
 during this checkpoint's validation. The Nginx template rendering, Basic Auth
