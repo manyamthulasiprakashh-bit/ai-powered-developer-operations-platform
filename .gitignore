@@ -19,5 +19,8 @@ frontend/.vite/
 .DS_Store
 *.log
 
+# Local secrets (owner Basic Auth credential, etc.)
+secrets/
+
 # IDE
 .vscode/

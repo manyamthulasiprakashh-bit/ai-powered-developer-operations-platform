@@ -79,3 +79,28 @@ export interface RepositoryAnalysis {
   };
   findings: AnalysisFinding[];
 }
+
+export interface AnalysisListItem {
+  id: number;
+  owner: string;
+  repository: string;
+  analyzed_at: string;
+  summary: string;
+  created_at: string;
+}
+
+export interface AnalysisListResponse {
+  items: AnalysisListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AnalysisStatistics {
+  total_analyses: number;
+  distinct_owners: number;
+  distinct_repositories: number;
+  analyses_last_7_days: number;
+  analyses_last_30_days: number;
+  latest_analyzed_at: string | null;
+}

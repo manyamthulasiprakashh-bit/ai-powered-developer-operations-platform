@@ -6,7 +6,7 @@ A production-style portfolio project for GitHub repository intelligence, health 
 
 This project is designed for a public portfolio deployment with a React frontend and FastAPI backend.
 
-- Frontend: deployed behind a production host with the backend URL supplied via `VITE_API_BASE_URL`
+- Frontend: static SPA served by a host or the same-origin Nginx proxy; the API base is supplied via `VITE_API_BASE_URL` (`/` for same-origin)
 - Backend: FastAPI service deployed with `PORT` from the hosting platform
 - API docs: generated automatically by FastAPI at `/docs`
 
@@ -15,19 +15,27 @@ This project is designed for a public portfolio deployment with a React frontend
 - Frontend: React + TypeScript + Vite + Tailwind CSS
 - Backend: Python + FastAPI + Pydantic settings
 - External integration: GitHub REST API via configurable `GITHUB_API_URL`
-- Production hosting pattern: backend on a trusted app platform, frontend on a static site host
-- Local development: Docker Compose for the API service and local Vite frontend
+- Production hosting pattern: backend on a trusted app platform, frontend on a static site host, or the same-origin Nginx demo
+- Local development: Docker Compose for the same-origin frontend proxy, API, and PostgreSQL; Vite-only development is limited to public endpoints
 
 ## Local Development
 
 ### Backend
+
+The backend persists analyses and documents to PostgreSQL, and the protected
+endpoints require `API_KEY`. Set `DATABASE_URL`, run `alembic upgrade head`, and
+set `API_KEY` before using the database-backed workflow. Without `API_KEY`, the
+protected endpoints fail closed with `503`. For commands run from `backend/`,
+either export the variables or copy `.env.example` to `backend/.env`; the
+repository-root `.env` is used by Compose.
 
 ```bash
 cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+alembic upgrade head
+API_KEY="$(openssl rand -hex 32)" uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Frontend
@@ -38,11 +46,22 @@ npm install
 npm run dev
 ```
 
+`npm run dev` starts Vite only. It can call the public health and GitHub read
+endpoints, but it does not send `X-API-Key` and has no development proxy. Calls
+to analysis creation, analysis history/statistics, document intake, or document
+extraction will return `401` or `503`. Use the Compose/Nginx workflow below for
+those protected flows; do not add `API_KEY` to Vite or browser code.
+
 ### Docker Compose
 
 ```bash
+cp .env.example .env
+# Set API_KEY in .env and create secrets/htpasswd as described in V9.
 docker compose up --build
 ```
+
+The frontend proxy is served at `http://localhost:5173` behind owner Basic Auth.
+The backend and database publish no host ports.
 
 ## Environment Variables
 
@@ -59,50 +78,75 @@ Required variables for production deployment:
 - `CORS_ALLOWED_ORIGINS`: comma-separated allowed frontend origins for browser access
 - `GITHUB_API_URL`: optional override for the GitHub API endpoint; defaults to `https://api.github.com`
 - `GITHUB_TOKEN`: optional GitHub token for higher rate limits; keep it out of source control
-- `DATABASE_URL`: required when the app is connected to Postgres
-- `VITE_API_BASE_URL`: frontend API base URL used for deployed backend requests
+- `DATABASE_URL`: required for persistence, readiness, and the database-backed endpoints
+- `API_KEY`: server-side key required by analysis creation, analysis history/statistics, and document intake/extraction
+- `VITE_API_BASE_URL`: frontend API base URL; use `/` for the same-origin Compose/Nginx demo, or the exact backend origin for split hosting
 
-For the current Render services, set `CORS_ALLOWED_ORIGINS` to exactly
-`https://ai-powered-developer-operations-platform.onrender.com` and set the
-frontend build variable `VITE_API_BASE_URL` to exactly
-`https://ai-powered-developer-operations-backend.onrender.com`. See
-[docs/development.md](docs/development.md) for service roots and smoke tests.
+For split hosting, set `CORS_ALLOWED_ORIGINS` to the exact frontend origin and
+`VITE_API_BASE_URL` to the exact backend origin. The Render hostnames in older
+examples are deployment examples, not endpoints verified by this repository;
+replace them with your actual service origins. For the V9 same-origin
+topology, use `VITE_API_BASE_URL=/` and keep the backend unexposed. See
+[docs/development.md](docs/development.md) for the development workflow and
+smoke tests.
 
-Never hardcode secrets or tokens in the repository. Keep values in the deployment platform's environment settings.
+Never hardcode secrets or tokens in the repository. Keep values in the deployment platform's environment settings. `API_KEY` cannot be placed in a `VITE_*` variable because Vite embeds those values into browser assets.
 
 ## Deployment
 
-This project is intentionally structured for a simple deployment flow:
+This project supports two deployment shapes:
 
-1. Deploy the FastAPI backend to a platform that sets `PORT` automatically.
-2. Configure allowed CORS origins for the deployed frontend URL.
-3. Set `VITE_API_BASE_URL` to the deployed backend URL in the frontend build environment.
-4. Keep the GitHub integration unchanged and rely on the public GitHub REST API unless a token is provided.
+1. **Split hosting:** deploy the FastAPI backend to a platform that sets `PORT`
+   automatically, configure CORS for the frontend origin, and build the frontend
+   with `VITE_API_BASE_URL` set to the backend origin. Protected endpoints require
+   a server-side proxy so the browser never holds `API_KEY`.
+2. **Same-origin demo (V9):** run the Compose/Nginx topology, which serves the SPA
+   and proxies `/api/` with the key added server-side behind owner Basic Auth.
+   Build with `VITE_API_BASE_URL=/` and keep the backend unexposed.
+
+PostgreSQL and `alembic upgrade head` are required for the database-backed
+workflow. Keep the GitHub integration unchanged and rely on the public GitHub
+REST API unless a token is provided.
 
 ### Recommended production architecture
 
 - Backend: Render or another app platform that supports FastAPI
-- Frontend: Cloudflare Pages, Vercel, or Netlify for the static React build
+- Frontend: Cloudflare Pages, Vercel, Netlify, or the V9 same-origin Nginx proxy
 - GitHub integration: direct REST API calls with optional token support via environment variables
 
 ## API Endpoints
 
-Core endpoints:
+Public endpoints:
 
-- `GET /api/health` — backend service health check
+- `GET /api/health` (alias `/health`) — backend service liveness
+- `GET /api/ready` (alias `/ready`) — database-aware readiness
 - `GET /api/github/repositories/{owner}/{repo}` — repository metadata
 - `GET /api/github/repositories/{owner}/{repo}/commits` — recent commits
 - `GET /api/github/repositories/{owner}/{repo}/pull-requests` — pull requests
 - `GET /api/github/repositories/{owner}/{repo}/issues` — repository issues
 - `GET /api/github/repositories/{owner}/{repo}/contents` — repository contents
-- `POST /api/github/repositories/{owner}/{repo}/analysis` — deterministic V1 repository analysis
 
-V1 analysis uses the existing GitHub REST integration to calculate repository
-activity and maintenance indicators. It does not require OpenAI, does not claim
-to be AI-powered, and does not persist results. PostgreSQL is not used during
-request handling; `OPENAI_API_KEY` and `DATABASE_URL` remain optional settings.
+`/metrics`, `/docs`, `/redoc`, and the root response are also public.
 
-FastAPI also exposes interactive docs at `/docs` and `/redoc`.
+Protected endpoints (`X-API-Key`):
+
+- `POST /api/github/repositories/{owner}/{repo}/analysis` — deterministic repository analysis (persists the result)
+- `GET /api/analyses` — persisted analysis history (paginated)
+- `GET /api/analyses/{analysis_id}` — one persisted analysis
+- `GET /api/statistics` — aggregate statistics over persisted analyses
+- `POST /api/documents` — document intake (`.txt`/`.md`, UTF-8, multipart `file`)
+- `POST /api/documents/{document_id}/extractions` — deterministic field extraction
+
+Analysis is deterministic and is persisted to PostgreSQL; it does not use OpenAI
+and does not claim to be AI-powered. Document extraction is also deterministic:
+it recognizes a small set of label lines and returns values, confidence, and
+evidence without calling a model or network service. `DATABASE_URL` must point
+at PostgreSQL with the Alembic migrations applied. M4/LLM extraction is not
+implemented; `OPENAI_API_KEY` and `OPENAI_MODEL` are reserved and currently
+unused. See [docs/api.md](docs/api.md) for request and response details.
+
+FastAPI also exposes interactive docs at `/docs` and `/redoc`. The `/metrics`
+endpoint is public.
 
 ## Testing
 
@@ -113,33 +157,47 @@ pytest
 
 ```bash
 cd frontend
-npm run build
+npm run lint
+VITE_API_BASE_URL=/ npm run build
+npm run verify:dist
 ```
+
+`verify:dist` checks that the built bundle uses relative API paths and does not
+contain an `X-API-Key` reference, a localhost/loopback API URL, or configured
+secret values. CI currently runs backend tests plus frontend lint/typecheck and
+build; it does not run `verify:dist`.
 
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md)
 - [docs/api.md](docs/api.md)
 - [docs/development.md](docs/development.md)
+- [docs/security.md](docs/security.md)
 
 ## V2 - Infrastructure & DevOps
 
 ### Architecture
 
-The React/Vite frontend calls a FastAPI backend, which normalizes data from the configurable GitHub REST API. Docker Compose provides a local backend, frontend, and PostgreSQL service; the current API does not yet use PostgreSQL in request handling.
+The React/Vite frontend calls a FastAPI backend, which normalizes data from the configurable GitHub REST API. Docker Compose provides a local backend, frontend, and PostgreSQL service. Since V8, completed analyses are persisted to PostgreSQL and history/statistics are read from it; earlier versions did not use PostgreSQL in request handling.
 
 ### Local development
 
-Copy `.env.example` to `.env`, then run `docker compose up --build`, or start the backend and frontend separately using the commands above. The local defaults are intentionally development values.
+Copy `.env.example` to `.env`, then run `docker compose up --build`. The Compose
+stack is the supported local workflow for protected analysis, history, and
+document endpoints because the frontend Nginx proxy adds `X-API-Key` server-side
+behind owner Basic Auth. The Vite-only frontend can call public endpoints but
+cannot call protected endpoints without a server-side proxy; see
+[Local Development](#local-development). The local defaults are intentionally
+development values.
 
 ### Production deployment
 
-No deployment is performed or claimed by this repository. A deployment must provide `PORT`, set `APP_ENV=production` and `APP_DEBUG=false`, configure `CORS_ALLOWED_ORIGINS` and `VITE_API_BASE_URL` with real service origins, and provide secrets through the platform secret store. Do not use the local PostgreSQL password in production.
+No deployment is performed or claimed by this repository. A deployment must provide `PORT`, set `APP_ENV=production` and `APP_DEBUG=false`, configure `CORS_ALLOWED_ORIGINS` with real service origins, and set `VITE_API_BASE_URL` to `/` for the same-origin proxy or to the exact backend origin for split hosting. Provide secrets through the platform secret store. Do not use the local PostgreSQL password in production.
 
 ### Health, readiness, and logging
 
 - `GET /api/health` is a lightweight process health response and does not call GitHub.
-- `GET /api/ready` is a deterministic configuration-readiness response. PostgreSQL is not reported as a live dependency because the current API does not access it.
+- `GET /api/ready` is a database-aware readiness response as of V8. It executes `SELECT 1` and reports PostgreSQL as a live dependency (see [V8 - Database Persistence](#v8---database-persistence)); earlier versions only checked configuration.
 - Backend logs use consistent timestamped levels and include method, path, status, and duration. Tokens, authorization headers, and request bodies are not logged.
 
 ### Error handling
@@ -148,15 +206,15 @@ GitHub timeouts return `504`, rate limits return `429`, authentication failures 
 
 ### Docker and CI
 
-The backend container runs Uvicorn on the platform `PORT` as a non-root user. The frontend image builds the static Vite bundle and serves it with Nginx. Compose remains a local development setup and uses an explicitly development-only database default. GitHub Actions runs backend tests plus frontend lint/type validation and a production build on pushes and pull requests; it does not deploy.
+The backend container runs Uvicorn on the platform `PORT` as a non-root user. The frontend image builds the static Vite bundle and serves it with Nginx. Compose remains a local development setup and uses an explicitly development-only database default. GitHub Actions runs backend tests plus frontend lint/type validation and a production build on pushes and pull requests; it does not run `verify:dist` and does not deploy.
 
 ### Known limitations
 
-PostgreSQL migrations and runtime persistence are not implemented, GitHub calls are synchronous and uncached, there is no metrics/tracing platform, and Docker/CI execution has not been verified in this environment where Docker is unavailable.
+PostgreSQL migrations and runtime persistence were not implemented when V2 was written; since V8 they are implemented with Alembic and the `analyses` table, and the M0-M3 document workflow adds the document tables (see [V8 - Database Persistence](#v8---database-persistence) and [M0-M3 - Document Intake and Deterministic Extraction](#m0-m3---document-intake-and-deterministic-extraction)). GitHub reads are async and use a process-local TTL cache since V4. There is no metrics/tracing platform (only in-process counters), and Docker/PostgreSQL execution has not been verified in this environment where Docker is unavailable.
 
 ## V3 - Security & Compliance Hardening
 
-V3 adds environment-validated production CORS, security response headers, configurable process-local rate limiting, bounded and traversal-safe inputs, secret-safe error responses, reusable log redaction, non-root frontend serving, and dependency audit steps in CI. Current read-only endpoints remain public; authentication is intentionally a future boundary rather than an invented user system.
+V3 adds environment-validated production CORS, security response headers, configurable process-local rate limiting, bounded and traversal-safe inputs, secret-safe error responses, reusable log redaction, non-root frontend serving, and dependency audit steps in CI. The public health, readiness, metrics, and GitHub read endpoints remain public. Analysis creation, analysis history/statistics, document intake, and document extraction require `X-API-Key`; this is a single shared server-side key, not a user system. Browser clients use the same-origin Nginx proxy so the key never enters frontend assets.
 
 See [docs/security.md](docs/security.md) for the threat model, implemented controls, compliance-oriented design, and known limitations. This is security hardening, not a compliance certification or production security audit.
 
@@ -167,7 +225,7 @@ See [docs/security.md](docs/security.md) for the threat model, implemented contr
 - GitHub reads use an async `httpx` client with connection pooling and separate connect/read timeouts configured through environment variables.
 - GitHub responses use a bounded, configurable TTL cache. Identical concurrent cache misses are single-flighted within one backend process; errors are never cached.
 - Pagination remains bounded, with `GITHUB_MAX_PER_PAGE` controlling the list endpoints.
-- The shared GitHub client is closed through FastAPI lifespan handling. Health and readiness remain lightweight and do not depend on GitHub availability.
+- The shared GitHub client is closed through FastAPI lifespan handling. Health and readiness do not depend on GitHub availability; readiness additionally verifies database connectivity as of V8.
 - The frontend API contract and UI are unchanged. Existing synchronous client doubles remain supported by the service compatibility path.
 
 ### Future production scale
@@ -186,18 +244,266 @@ V6 adds JSON-compatible logs, safe `X-Request-ID` correlation, bounded aggregate
 
 ### Production architecture
 
-Deploy two independently managed services: a FastAPI backend container and a static Vite frontend served by the unprivileged Nginx image. The frontend calls the backend origin configured at build time through `VITE_API_BASE_URL`; the backend calls GitHub using server-side configuration and optional `GITHUB_TOKEN`. PostgreSQL remains a local Compose dependency only and is not used by current request handling.
+The V7 split-hosting pattern deploys two independently managed services: a FastAPI backend container and a static Vite frontend served by the unprivileged Nginx image. The frontend calls the backend origin configured at build time through `VITE_API_BASE_URL`; the backend calls GitHub using server-side configuration and optional `GITHUB_TOKEN`. The V9 section adds a same-origin Nginx proxy alternative for the protected endpoints. PostgreSQL is used at runtime since V8 (the API persists analyses and serves history/statistics) and Compose applies migrations before the API starts; see [V8 - Database Persistence](#v8---database-persistence).
 
 ### Required platform settings
 
-For the backend service, set `APP_ENV=production`, `APP_DEBUG=false`, `CORS_ALLOWED_ORIGINS` to the exact HTTPS frontend origin, and allow the hosting platform to provide `PORT`. Configure the existing GitHub, timeout, cache, retry, circuit-breaker, rate-limit, and logging variables from `.env.example` as needed. Keep `GITHUB_TOKEN`, database credentials, and other secrets in the platform secret store.
+For the backend service, set `APP_ENV=production`, `APP_DEBUG=false`, `CORS_ALLOWED_ORIGINS` to the exact HTTPS frontend origin, and allow the hosting platform to provide `PORT`. Set `DATABASE_URL` for the managed PostgreSQL instance. Configure the existing GitHub, timeout, cache, retry, circuit-breaker, rate-limit, and logging variables from `.env.example` as needed. Keep `GITHUB_TOKEN`, database credentials, and other secrets in the platform secret store.
 
-For the frontend service, set the build variable `VITE_API_BASE_URL` to the exact public HTTPS backend origin. No frontend secret belongs in a `VITE_*` variable because Vite embeds those values into browser assets. Production builds fail when this variable is absent; localhost is retained only for local development and Compose defaults.
+For split hosting, set the frontend build variable `VITE_API_BASE_URL` to the exact public HTTPS backend origin. For the V9 same-origin demo, use the `/` sentinel instead and let the frontend Nginx proxy `/api/` to the backend. No frontend secret belongs in a `VITE_*` variable because Vite embeds those values into browser assets. Production builds fail when this variable is absent; localhost is retained only for local development and Compose defaults.
 
 ### Deployment commands and checks
 
-Backend startup command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (the backend Dockerfile already supplies this behavior). Frontend startup is the Nginx container command in [frontend/Dockerfile](frontend/Dockerfile). After each service is hosted, verify `GET /health`, `GET /ready`, and `GET /metrics` on the backend, then verify the frontend can load repository data through the configured backend origin. Set the final frontend origin in `CORS_ALLOWED_ORIGINS` only after it exists.
+Backend startup command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (the backend Dockerfile already supplies this behavior). Apply the schema with `alembic upgrade head` before the API starts; Compose does this automatically through the one-shot `migrate` service (see [V8 - Database Persistence](#v8---database-persistence)). Frontend startup is the Nginx container command in [frontend/Dockerfile](frontend/Dockerfile). After each service is hosted, verify `GET /health`, `GET /ready`, and `GET /metrics` on the backend, then verify the frontend can load repository data and analysis history through the configured backend origin. Set the final frontend origin in `CORS_ALLOWED_ORIGINS` only after it exists.
 
 ### Deployment status and blockers
 
-Deployment is not complete until a public backend host and frontend host are configured and externally verified. This repository does not invent public URLs, provision cloud resources, configure provider credentials, or claim a successful deployment. Docker was unavailable during local validation, and external DNS, TLS, platform environment settings, CORS from the final browser origin, GitHub access, and public frontend/backend communication remain deployment-time checks.
+Deployment is not complete until a public backend host and frontend host are configured and externally verified. This repository does not invent public URLs, provision cloud resources, configure provider credentials, or claim a successful deployment. Docker was unavailable during local validation, and external DNS, TLS, platform environment settings, CORS from the final browser origin, GitHub access, public frontend/backend communication, applying the Alembic migration to a real PostgreSQL instance, and database-aware readiness against live PostgreSQL remain deployment-time checks.
+
+## V8 - Database Persistence
+
+V8 adds PostgreSQL-backed persistence for completed repository analyses, Alembic
+schema migrations, and a database-aware readiness probe. Analysis stays
+deterministic; persistence stores the metrics and findings that were already
+computed.
+
+### Persisted data: the `analyses` table
+
+Completed analyses are stored in the `analyses` table:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | integer, primary key | Surrogate identifier, auto-incrementing |
+| `owner` | varchar(100), not null, indexed | GitHub repository owner |
+| `repository` | varchar(100), not null, indexed | GitHub repository name |
+| `analyzed_at` | timestamp with time zone, not null | Time the analysis ran (UTC) |
+| `summary` | text, not null | Human-readable analysis summary |
+| `metrics` | json, not null | Deterministic metrics captured at analysis time |
+| `findings` | json, not null | Findings produced by the deterministic rules |
+| `created_at` | timestamp with time zone, not null | Row creation time (`server_default now()`) |
+
+`metrics` and `findings` mirror the analysis response schema, so stored payloads
+round-trip without transformation. A successful `POST .../analysis` writes one
+row; failed analyses and failed writes write none.
+
+### Alembic migration workflow
+
+Migrations live in `backend/migrations/` and are configured by
+`backend/alembic.ini`. The URL is intentionally left blank in `alembic.ini` and
+resolved at runtime from the same application settings / `DATABASE_URL`, so
+credentials are never committed to the config file. Legacy `postgresql://` and
+`postgresql+psycopg2://` URLs are normalized to the installed `psycopg` (v3)
+driver.
+
+Run migrations from `backend/` (outside Docker) with:
+
+```bash
+cd backend
+alembic upgrade head          # apply all migrations
+alembic downgrade base        # revert all migrations
+alembic check                 # confirm models and migrations agree
+alembic upgrade head --sql    # emit offline SQL without connecting
+```
+
+### Analysis history, detail, and statistics endpoints
+
+- `GET /api/analyses` — newest-first page of persisted analyses. Query parameters:
+  `limit` (integer, default `20`, allowed range `1`–`100`) and `offset` (integer,
+  default `0`, minimum `0`). Returns `{ items, total, limit, offset }`, where each
+  item contains `id`, `owner`, `repository`, `analyzed_at`, `summary`, and
+  `created_at`. Invalid pagination returns `422`.
+- `GET /api/analyses/{analysis_id}` — one persisted analysis including `metrics`
+  and `findings`; returns `404` when the record does not exist.
+- `GET /api/statistics` — database aggregates: `total_analyses`, `distinct_owners`,
+  `distinct_repositories`, `analyses_last_7_days`, `analyses_last_30_days`, and
+  `latest_analyzed_at` (null when no analyses exist).
+
+Database failures on these endpoints return a safe `500` without SQL text,
+credentials, or tracebacks.
+
+### Health versus readiness
+
+- `GET /api/health` (alias `GET /health`) is liveness: it returns service name and
+  environment and does not touch the database or GitHub.
+- `GET /api/ready` (alias `GET /ready`) is database-aware readiness: it executes
+  `SELECT 1` through the configured database session. It returns `200` with
+  `checks.database = "ok"` when the database is reachable, and a safe non-2xx
+  `503` with `checks.database = "unavailable"` when it is not. No credentials,
+  SQL, or tracebacks are exposed.
+
+### Database configuration
+
+Set `DATABASE_URL` to the database service. Use placeholders only:
+
+```bash
+DATABASE_URL=postgresql://<user>:<password>@<host>:<port>/<database>
+```
+
+Compose uses a `postgres`/`db:5432` URL with an explicitly development-only
+default password; production deployments must supply real credentials through the
+platform secret store. Never commit real credentials, and never use the local
+development password in production.
+
+### Docker Compose migration service and ordering
+
+Compose defines a one-shot `migrate` service that runs `alembic upgrade head`
+before the API starts:
+
+- `migrate` waits for `db` to be healthy, applies migrations, then exits
+  (`restart: "no"`).
+- `backend` waits for `db` (healthy) **and** for `migrate` to complete
+  successfully before Uvicorn starts. If the migration fails, the API container
+  does not start.
+- Migrations therefore run once per deployment rather than in every application
+  worker.
+
+Local (non-Compose) backend startup is unchanged: `uvicorn app.main:app --reload`
+does not apply migrations automatically, so run `alembic upgrade head` first.
+
+### Verified behavior versus deployment checks
+
+Verified in this repository (Docker was unavailable during validation):
+
+- The full backend test suite, including an end-to-end test that a successful
+  analysis `POST` is persisted and then appears in `GET /api/analyses`, is
+  retrievable from `GET /api/analyses/{id}`, and is reflected in
+  `GET /api/statistics`.
+- Migration tests apply `alembic upgrade head` and downgrade against a temporary
+  SQLite database, including preservation of existing analysis rows.
+- Frontend typecheck and production build.
+
+Not yet verified — still requires a real Docker/PostgreSQL test:
+
+- `docker compose up --build` end-to-end, including the `migrate` service ordering.
+- Applying the migration against real PostgreSQL (only SQLite migrations have
+  been exercised).
+- The database-aware readiness probe returning `503` against a genuinely
+  unreachable PostgreSQL server.
+- Nginx template rendering, Basic Auth, request-size enforcement, and the
+  container guard at runtime.
+
+## M0-M3 - Document Intake and Deterministic Extraction
+
+The document workflow is implemented through M3. Both endpoints are protected by
+the same `X-API-Key` boundary as analysis creation:
+
+- `POST /api/documents` accepts one multipart `file` containing a `.txt` or `.md`
+  document encoded as UTF-8. It validates the extension, media type, UTF-8
+  decoding, non-empty text, file size, text length, and whole-request size. The
+  `201` response returns document metadata and a bounded preview; the stored body
+  is never returned in full. Intake writes the document and its
+  `document_received` audit event atomically.
+- `POST /api/documents/{document_id}/extractions` runs the local deterministic
+  extractor and stores a new extraction attempt. It recognizes `client_name`,
+  `total_fee`, `effective_date`, and `reference_id`; missing or ambiguous values
+  are returned as `null` rather than guessed. The response includes confidence,
+  evidence with Unicode offsets, warnings, and `provider: "deterministic"`.
+  Extraction records and audit events are committed atomically with the
+  document status.
+
+The `audit_events` table is written by intake and extraction, but there is no
+audit read API. Document detail, human correction/decision, and review endpoints
+are not implemented; their schemas/models exist as persistence foundations.
+M4/LLM extraction is not implemented: the extractor does not call OpenAI or any
+network model, and `OPENAI_API_KEY`/`OPENAI_MODEL` are unused. See
+[docs/api.md](docs/api.md) for the field rules and error responses.
+
+## V9 - Single-Owner Public Demo Deployment
+
+The protected endpoints (analysis creation, analysis history/statistics,
+document intake, and document extraction) require the server-side `API_KEY` in
+`X-API-Key`. A browser cannot hold that key, so the public-demo Compose topology
+serves the SPA and proxies the API through a single origin, adding the key
+server-side, behind an owner Basic Auth gate.
+
+### Topology
+
+- `frontend` (unprivileged Nginx) is the only published service (`5173:8080`).
+  It serves the built SPA at `/` and reverse-proxies `/api/` to
+  `http://backend:8000`, injecting `X-API-Key` from the `API_KEY` environment
+  variable at container start (rendered into the Nginx config by the image
+  entrypoint; never written into frontend assets).
+- The entire server, including `/api/`, is protected by Nginx `auth_basic`
+  using a single owner credential, so the proxy is not an open relay and the
+  protected endpoints are not public.
+- `backend` and `db` publish no host ports. The backend is reachable only by the
+  frontend proxy over the `edge` network; `db` is reachable only over the
+  internal `data` network.
+- The SPA is built with `VITE_API_BASE_URL=/`, so it issues relative `/api/...`
+  requests to the same origin.
+
+### Required secrets
+
+- `API_KEY`: the backend API key. Generate with `openssl rand -hex 32`. The
+  frontend Nginx entrypoint accepts only `[A-Za-z0-9_-]` with a length of 16-128
+  characters because the value is injected into its config. Never put it in
+  `VITE_*`, frontend code, browser storage, or responses.
+- Owner Basic Auth credential: a single `user:password-hash` line mounted
+  read-only at `/etc/nginx/auth/htpasswd`. Generate it outside the image and do
+  not commit it. The Nginx image does not ship `htpasswd`, so use a host tool:
+
+  ```bash
+  mkdir -p secrets
+  openssl passwd -apr1 'your-owner-password' > secrets/htpasswd   # password hash only
+  # or, if installed: htpasswd -c -B secrets/htpasswd owner
+  ```
+
+  `secrets/` is gitignored. The frontend container refuses to start (fail-fast)
+  when `API_KEY` is missing, unsafe, or out of range, or when the htpasswd path
+  is missing, a directory, unreadable, empty, or lacks a `user:hash` line.
+
+### Security assumptions
+
+- Serve this only over HTTPS. Basic Auth transmits the owner credential on every
+  request; without TLS the credential and session are exposed.
+- The backend must not be exposed publicly. Keep it off host ports (as in the
+  Compose file) or behind a network that only the frontend can reach; a directly
+  reachable backend is still key-protected but becomes an unnecessary exposure.
+- The proxy overwrites `X-Forwarded-For`/`X-Real-IP` with the connecting client
+  address (it does not append client-supplied values), and the backend honors
+  those headers only from the frontend proxy address (`TRUSTED_PROXY_IPS`,
+  default `172.28.0.10`, matching the static `FRONTEND_PROXY_IP`). No arbitrary
+  client-supplied forwarding header is trusted.
+- Basic Auth is a single shared credential: it authenticates "the owner", has no
+  per-user identity, MFA, or per-session revocation, and is not rate-limited at
+  the edge. This is acceptable for a single-owner demo, not for multi-user use.
+
+### Local development differences
+
+- `docker compose up --build` runs the public-demo topology (proxy + Basic Auth,
+  no published backend/db ports, relative API base). Create `secrets/htpasswd`
+  and set `API_KEY` in `.env` first. This is the supported local workflow for
+  protected analysis, history, statistics, and document endpoints.
+- Backend-only local development is supported: run PostgreSQL, apply
+  `alembic upgrade head`, set `API_KEY`, start `uvicorn app.main:app --reload`,
+  and call protected endpoints with `curl -H "X-API-Key: $API_KEY"`. Public
+  health and GitHub read endpoints do not require the header.
+- Vite-only local development (`npm run dev` with `VITE_API_BASE_URL` pointing
+  at `http://localhost:8000`) cannot call protected endpoints: the browser does
+  not send `X-API-Key` and there is no Vite development proxy. Use the Compose/
+  Nginx workflow or another server-side proxy for those flows. Do not embed the
+  key in Vite or browser code.
+- Split hosting (static frontend + separate backend, as in V7) is still
+  supported: set `VITE_API_BASE_URL` to the absolute backend origin and keep the
+  key server-side; browser clients then need a server-side proxy or owner gate
+  for the protected endpoints.
+
+### Verification
+
+- Backend: `cd backend && pytest`.
+- Frontend: `cd frontend && npm run lint && VITE_API_BASE_URL=/ npm run build
+  && npm run verify:dist`. The last step fails if the bundle contains an
+  `X-API-Key` reference, a localhost/loopback API URL, or any configured secret
+  value, and succeeds only when relative `/api/...` paths are present.
+
+### Container verification status
+
+Docker was unavailable during validation, so the following are explicitly
+unverified and must be checked on a machine with Docker: that the image renders
+`/etc/nginx/templates/default.conf.template` into `/etc/nginx/conf.d/default.conf`,
+that the guard exits non-zero when secrets are absent, that `auth_basic` gates
+both the SPA and `/api/`, and that `docker compose config` and
+`docker compose up --build` succeed. The image family was confirmed (from the
+upstream `nginx`/`nginx-unprivileged` Dockerfiles) to install `envsubst`, ship
+`/docker-entrypoint.d/20-envsubst-on-templates.sh`, keep the entrypoint, and own
+`/etc/nginx` as the unprivileged user.

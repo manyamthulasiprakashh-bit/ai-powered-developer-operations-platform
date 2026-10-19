@@ -1,0 +1,32 @@
+# Keep developer-local secrets and generated artifacts out of the backend image.
+# The Dockerfile does `COPY . .`, so anything not ignored here can land in a
+# layer. Never copy developer credentials into an image.
+
+# Environment files (placeholders/templates are not needed in the image).
+.env
+.env.*
+
+# Virtual environments
+.venv/
+.venv*/
+venv/
+env/
+
+# Python caches / bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local secrets, logs, and generated artifacts
+secrets/
+*.log
+.DS_Store
+
+# Version control metadata
+.git/
+.gitignore

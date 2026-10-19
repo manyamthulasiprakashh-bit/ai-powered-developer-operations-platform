@@ -1,0 +1,28 @@
+# Keep developer-local secrets and generated artifacts out of the frontend
+# image. The Dockerfile installs dependencies explicitly, then does `COPY . .`;
+# without this file a host node_modules/dist/.env would overwrite the clean
+# install and could leak into the final image.
+
+# Environment files (never needed in the image; Vite reads them at build time
+# from the Docker build context only when explicitly passed).
+.env
+.env.*
+
+# Installed dependencies and build output are produced inside the image.
+node_modules/
+dist/
+*.tsbuildinfo
+.vite/
+
+# Test/build caches and coverage
+coverage/
+.nyc_output/
+
+# Local secrets and logs
+secrets/
+*.log
+.DS_Store
+
+# Version control metadata
+.git/
+.gitignore

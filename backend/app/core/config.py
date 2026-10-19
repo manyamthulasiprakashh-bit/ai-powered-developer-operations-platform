@@ -24,7 +24,23 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("CORS_ALLOWED_ORIGINS", "CORS_ORIGINS"),
     )
     rate_limit_requests: int = Field(default=60, ge=1)
+    rate_limit_analysis_requests: int = Field(default=10, ge=1)
     rate_limit_window_seconds: int = Field(default=60, ge=1)
+    trusted_proxy_ips: str | list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("TRUSTED_PROXY_IPS", "TRUSTED_PROXIES"),
+    )
+    api_key: str | None = Field(default=None)
+    document_max_size_bytes: int = Field(default=1_048_576, ge=1, le=16_777_216)
+    document_max_text_chars: int = Field(default=20_000, ge=1, le=200_000)
+    document_preview_chars: int = Field(default=500, ge=1, le=2_000)
+    document_multipart_overhead_bytes: int = Field(default=65_536, ge=0, le=1_048_576)
+    document_allowed_content_types: str | list[str] = Field(
+        default_factory=lambda: ["text/plain", "text/markdown"]
+    )
+    document_allowed_extensions: str | list[str] = Field(
+        default_factory=lambda: [".txt", ".md"]
+    )
     github_connect_timeout: float = Field(default=5.0, gt=0)
     github_read_timeout: float = Field(default=15.0, gt=0)
     github_max_connections: int = Field(default=100, ge=1)
@@ -64,12 +80,48 @@ class Settings(BaseSettings):
         environment = info.data.get("app_env", "development")
         return validate_cors_origins(origins, environment)
 
+    @field_validator("trusted_proxy_ips", mode="before")
+    @classmethod
+    def validate_trusted_proxy_ips(cls, value):
+        if value in (None, ""):
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("document_allowed_content_types", mode="before")
+    @classmethod
+    def validate_document_content_types(cls, value):
+        if value in (None, ""):
+            return ["text/plain", "text/markdown"]
+        items = value.split(",") if isinstance(value, str) else value
+        return [str(item).split(";")[0].strip().lower() for item in items if str(item).strip()]
+
+    @field_validator("document_allowed_extensions", mode="before")
+    @classmethod
+    def validate_document_extensions(cls, value):
+        if value in (None, ""):
+            return [".txt", ".md"]
+        items = value.split(",") if isinstance(value, str) else value
+        normalized = []
+        for item in items:
+            extension = str(item).strip().lower()
+            if not extension:
+                continue
+            normalized.append(extension if extension.startswith(".") else f".{extension}")
+        return normalized
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
     )
+
+    @property
+    def document_max_request_bytes(self) -> int:
+        """Hard cap for the whole multipart upload request (file + framing)."""
+        return self.document_max_size_bytes + self.document_multipart_overhead_bytes
 
 
 @lru_cache

@@ -5,6 +5,7 @@ from app.api.routes.github import get_github_service
 from app.core.config import Settings
 from app.core.exceptions import GitHubServiceError
 from app.core.security import InMemoryRateLimiter, redact_sensitive
+from app.db.session import get_db
 from app.main import app
 
 
@@ -67,9 +68,10 @@ def test_rate_limiter_enforces_and_resets_window():
     assert limiter.allow("client", now=111) == (True, 0)
 
 
-def test_health_endpoint_is_exempt_from_rate_limiting():
+def test_health_endpoint_is_exempt_from_rate_limiting(db_session):
     original = app.state.rate_limiter
     app.state.rate_limiter = InMemoryRateLimiter(max_requests=1, window_seconds=60)
+    app.dependency_overrides[get_db] = lambda: db_session
     try:
         client = TestClient(app)
         assert client.get("/").status_code == 200
@@ -79,6 +81,7 @@ def test_health_endpoint_is_exempt_from_rate_limiting():
         assert client.get("/api/health").status_code == 200
         assert client.get("/api/ready").status_code == 200
     finally:
+        app.dependency_overrides.clear()
         app.state.rate_limiter = original
 
 

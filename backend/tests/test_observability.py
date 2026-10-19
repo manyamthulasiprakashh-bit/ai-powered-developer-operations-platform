@@ -7,6 +7,7 @@ from app.api.routes.github import get_github_service
 from app.core.exceptions import GitHubServiceError
 from app.core.metrics import metrics
 from app.core.logging import JsonFormatter
+from app.db.session import get_db
 from app.main import app
 from app.integrations.github.client import GitHubClient
 from app.services.github_service import GitHubService
@@ -53,11 +54,14 @@ def test_metrics_endpoint_reports_http_counts_and_duration():
     assert "request_id" not in str(payload)
 
 
-def test_health_aliases_are_lightweight_and_available():
-    client = TestClient(app)
-
-    assert client.get("/health").json()["status"] == "ok"
-    assert client.get("/ready").json()["status"] == "ready"
+def test_health_aliases_are_lightweight_and_available(db_session):
+    app.dependency_overrides[get_db] = lambda: db_session
+    try:
+        client = TestClient(app)
+        assert client.get("/health").json()["status"] == "ok"
+        assert client.get("/ready").json()["status"] == "ready"
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_http_error_increments_error_counter():

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from functools import lru_cache
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
     GitHubAuthError,
@@ -14,9 +17,14 @@ from app.core.exceptions import (
     GitHubTimeoutError,
 )
 from app.core.config import get_settings
+from app.core.security import require_api_key
+from app.db.session import get_db
 from app.schemas.analysis import RepositoryAnalysisResponse
+from app.services.analysis_persistence import persist_analysis
 from app.services.analysis_service import RepositoryAnalysisService
 from app.services.github_service import GitHubService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/github", tags=["GitHub"])
 settings = get_settings()
@@ -67,14 +75,16 @@ async def get_repository(
     response_model=RepositoryAnalysisResponse,
     summary="Analyze a repository",
     description="Run deterministic V1 analysis using repository data retrieved from GitHub.",
+    dependencies=[Depends(require_api_key)],
 )
 async def analyze_repository(
     owner: RepositoryPart,
     repo: RepositoryPart,
     service: Annotated[RepositoryAnalysisService, Depends(get_analysis_service)],
+    db: Annotated[Session, Depends(get_db)],
 ):
     try:
-        return await service.analyze(owner, repo)
+        analysis = await service.analyze(owner, repo)
     except GitHubNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except GitHubAuthError as exc:
@@ -87,6 +97,17 @@ async def analyze_repository(
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     except GitHubServiceError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+    try:
+        await run_in_threadpool(persist_analysis, db, analysis)
+    except Exception as exc:
+        logger.error("analysis_persistence_failed error=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error.",
+        ) from exc
+
+    return analysis
 
 
 @router.get(

@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes.github import get_github_service
 from app.core.exceptions import GitHubAuthError, GitHubNotFoundError, GitHubRateLimitError, GitHubServiceError
+from app.db.session import get_db
 from app.integrations.github.client import GitHubClient
 from app.main import app
 from app.services.github_service import GitHubService
@@ -295,10 +296,11 @@ def test_repository_not_found_returns_404():
     app.dependency_overrides.clear()
 
 
-def test_analysis_endpoint_returns_schema_and_activity_metrics():
+def test_analysis_endpoint_returns_schema_and_activity_metrics(db_session, auth_headers):
     app.dependency_overrides[get_github_service] = lambda: GitHubService(client=FakeClient())
+    app.dependency_overrides[get_db] = lambda: db_session
 
-    response = TestClient(app).post("/api/github/repositories/microsoft/vscode/analysis")
+    response = TestClient(app, headers=auth_headers).post("/api/github/repositories/microsoft/vscode/analysis")
 
     assert response.status_code == 200
     payload = response.json()
@@ -318,10 +320,11 @@ def test_analysis_endpoint_returns_schema_and_activity_metrics():
     app.dependency_overrides.clear()
 
 
-def test_analysis_endpoint_handles_empty_activity():
+def test_analysis_endpoint_handles_empty_activity(db_session, auth_headers):
     app.dependency_overrides[get_github_service] = lambda: GitHubService(client=EmptyActivityClient())
+    app.dependency_overrides[get_db] = lambda: db_session
 
-    response = TestClient(app).post("/api/github/repositories/owner/repo/analysis")
+    response = TestClient(app, headers=auth_headers).post("/api/github/repositories/owner/repo/analysis")
 
     assert response.status_code == 200
     payload = response.json()
@@ -332,13 +335,13 @@ def test_analysis_endpoint_handles_empty_activity():
     app.dependency_overrides.clear()
 
 
-def test_analysis_endpoint_maps_not_found_and_github_failure():
+def test_analysis_endpoint_maps_not_found_and_github_failure(auth_headers):
     app.dependency_overrides[get_github_service] = lambda: GitHubService(client=AnalysisNotFoundClient())
-    not_found = TestClient(app).post("/api/github/repositories/owner/repo/analysis")
+    not_found = TestClient(app, headers=auth_headers).post("/api/github/repositories/owner/repo/analysis")
     assert not_found.status_code == 404
 
     app.dependency_overrides[get_github_service] = lambda: GitHubService(client=AnalysisFailureClient())
-    failure = TestClient(app).post("/api/github/repositories/owner/repo/analysis")
+    failure = TestClient(app, headers=auth_headers).post("/api/github/repositories/owner/repo/analysis")
     assert failure.status_code == 502
     assert failure.json()["detail"] == "GitHub service unavailable."
     app.dependency_overrides.clear()

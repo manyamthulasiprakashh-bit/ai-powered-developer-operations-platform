@@ -1,50 +1,101 @@
 services:
+  migrate:
+    build:
+      context: ./backend
+    image: ai-devops-backend:local
+    container_name: ai-devops-migrate
+    command: ["alembic", "upgrade", "head"]
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-dev-only-password}@db:5432/devops_platform
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - data
+    restart: "no"
+
   backend:
     build:
       context: ./backend
+    image: ai-devops-backend:local
     container_name: ai-devops-backend
-    ports:
-      - "8000:8000"
+    # Not published: reachable only by the frontend proxy over the internal
+    # network. The public demo exposes the frontend only.
     env_file:
       - path: .env
         required: false
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-dev-only-password}@db:5432/devops_platform
       PORT: ${BACKEND_PORT:-8000}
+      # Only the frontend proxy may set forwarding headers. Must match the
+      # frontend container's static address on the edge network.
+      TRUSTED_PROXY_IPS: ${FRONTEND_PROXY_IP:-172.28.0.10}
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health').read()"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
+    networks:
+      edge:
+      data:
 
   frontend:
     build:
       context: ./frontend
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+        # Same-origin: the SPA calls relative /api/... through this proxy.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/}
     container_name: ai-devops-frontend
     ports:
       - "5173:8080"
+    environment:
+      # Injected into the Nginx proxy config only; never placed in frontend
+      # assets, browser storage, or responses.
+      API_KEY: ${API_KEY:-}
+    volumes:
+      # Owner credential (bcrypt/apr1/crypt hash). Generate outside the image;
+      # never commit. See README and .env.example. The mounted file must be
+      # readable by uid 101 (the unprivileged nginx user), e.g. owned by uid 101
+      # or group 0 with mode 640; the entrypoint verifies this before starting.
+      - ./secrets/htpasswd:/etc/nginx/auth/htpasswd:ro
     depends_on:
       backend:
         condition: service_healthy
+    networks:
+      edge:
+        ipv4_address: ${FRONTEND_PROXY_IP:-172.28.0.10}
 
   db:
     image: postgres:16-alpine
     container_name: ai-devops-db
+    # Not published: reachable only by the API and migration services.
     environment:
       POSTGRES_DB: devops_platform
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev-only-password}
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d devops_platform"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
+    networks:
+      - data
+
+networks:
+  edge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${EDGE_SUBNET:-172.28.0.0/24}
+  data:
+    internal: true

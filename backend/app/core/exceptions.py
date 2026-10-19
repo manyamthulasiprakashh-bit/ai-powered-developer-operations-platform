@@ -14,6 +14,14 @@ class NotFoundError(AppException):
     """Raised when a requested resource does not exist."""
 
 
+class AuthenticationError(AppException):
+    """Raised when a request is missing valid API-key credentials."""
+
+
+class AuthenticationConfigurationError(AppException):
+    """Raised when API-key authentication is enabled but not configured server-side."""
+
+
 class GitHubServiceError(ExternalServiceError):
     """Raised when the GitHub API call fails."""
 
@@ -44,3 +52,35 @@ class GitHubTimeoutError(GitHubServiceError, TimeoutError):
 
 class GitHubCircuitOpenError(GitHubServiceError):
     """Raised when GitHub calls are temporarily stopped after repeated failures."""
+
+
+class UnsupportedDocumentError(AppException):
+    """Raised when an uploaded document has an unsupported type or encoding."""
+
+
+class DocumentTooLargeError(AppException):
+    """Raised when an uploaded document exceeds the configured size limit."""
+
+
+class InvalidDocumentError(AppException):
+    """Raised when an uploaded document is empty or is not valid UTF-8 text."""
+
+
+class DocumentNotFoundError(NotFoundError):
+    """Raised when a requested document does not exist."""
+
+
+class DocumentNotExtractableError(AppException):
+    """Raised when a document's current status does not permit extraction."""
+
+
+class ExtractionProviderError(ExternalServiceError):
+    """Raised when the document extraction provider fails."""
+
+
+class ExtractionTimeoutError(ExtractionProviderError, TimeoutError):
+    """Raised when a document extraction provider request times out."""
+
+
+class ExtractionOutputError(ExtractionProviderError):
+    """Raised when a provider returns output that cannot be validated."""
