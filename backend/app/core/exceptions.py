@@ -74,6 +74,10 @@ class DocumentNotExtractableError(AppException):
     """Raised when a document's current status does not permit extraction."""
 
 
+class DocumentNotDecidableError(AppException):
+    """Raised when a document's current state does not permit a decision."""
+
+
 class ExtractionProviderError(ExternalServiceError):
     """Raised when the document extraction provider fails."""
 

@@ -6,13 +6,24 @@ import re
 from pathlib import PurePosixPath
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Path as ApiPath, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Path as ApiPath,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.concurrency import run_in_threadpool
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.exceptions import (
     DocumentNotFoundError,
+    DocumentNotDecidableError,
     DocumentNotExtractableError,
     DocumentTooLargeError,
     InvalidDocumentError,
@@ -21,9 +32,28 @@ from app.core.exceptions import (
 from app.core.security import require_api_key
 from app.db.session import get_db
 from app.models.documents import DocumentStatus
-from app.schemas.documents import DocumentIntakeResponse, ExtractionDetail
+from app.schemas.documents import (
+    AuditEvent,
+    AuditEventListResponse,
+    DecisionDetail,
+    DecisionRequest,
+    DocumentDetail,
+    DocumentIntakeResponse,
+    DocumentListResponse,
+    DocumentSummary,
+    ExtractionDetail,
+)
 from app.services.document_extraction import run_deterministic_extraction
-from app.services.document_persistence import create_document
+from app.services.document_persistence import (
+    create_document,
+    get_document,
+    get_latest_decision,
+    get_latest_extraction,
+    list_audit_events,
+    list_documents,
+    list_recent_audit_events,
+    record_decision,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +178,46 @@ def _extract_document(db: Session, document_id: int) -> ExtractionDetail:
     return ExtractionDetail.model_validate(record)
 
 
+def _load_document_detail(
+    db: Session, document_id: int, preview_chars: int
+) -> DocumentDetail:
+    """Build the read-only document detail contract from persisted records.
+
+    Only a bounded preview of the stored body is returned; the latest extraction,
+    latest decision, and a bounded recent slice of audit events are attached.
+    """
+    document = get_document(db, document_id)
+    if document is None:
+        raise DocumentNotFoundError()
+
+    extraction = get_latest_extraction(db, document_id)
+    decision = get_latest_decision(db, document_id)
+    audit_events = list_recent_audit_events(db, document_id)
+    summary = DocumentSummary.model_validate(document)
+
+    return DocumentDetail(
+        **summary.model_dump(),
+        text_preview=_bounded_preview(document.text or "", preview_chars),
+        extraction=ExtractionDetail.model_validate(extraction) if extraction else None,
+        decision=DecisionDetail.model_validate(decision) if decision else None,
+        audit=[AuditEvent.model_validate(event) for event in audit_events],
+    )
+
+
+def _record_document_decision(
+    db: Session, document_id: int, payload: DecisionRequest
+) -> DecisionDetail:
+    """Record a review decision and convert the stored row to the API contract."""
+    record = record_decision(
+        db,
+        document_id=document_id,
+        decision=payload.decision,
+        corrections=[correction.model_dump() for correction in payload.corrections],
+        reason=payload.reason,
+    )
+    return DecisionDetail.model_validate(record)
+
+
 @router.post(
     "/documents",
     response_model=DocumentIntakeResponse,
@@ -241,3 +311,136 @@ async def extract_document_fields(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=SAFE_DB_ERROR_DETAIL,
         ) from exc
+
+
+@router.post(
+    "/documents/{document_id}/decisions",
+    response_model=DecisionDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Record a document decision",
+    description=(
+        "Approve or reject the latest successful extraction while the document is "
+        "in the extracted state. Corrections are stored on the decision and audit "
+        "trail without mutating the original extraction. A document may be decided "
+        "once; later decisions return 409."
+    ),
+    responses={
+        404: {"description": "Document not found."},
+        409: {"description": "Document is not in a decidable state."},
+    },
+)
+async def decide_document(
+    document_id: Annotated[int, ApiPath(ge=1, description="Stored document identifier.")],
+    payload: DecisionRequest,
+    db: Annotated[Session, Depends(get_db)],
+):
+    try:
+        return await run_in_threadpool(
+            _record_document_decision, db, document_id, payload
+        )
+    except (DocumentNotFoundError, DocumentNotDecidableError):
+        raise
+    except SQLAlchemyError as exc:
+        logger.error("document_decision_failed error=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=SAFE_DB_ERROR_DETAIL,
+        ) from exc
+
+
+@router.get(
+    "/documents",
+    response_model=DocumentListResponse,
+    summary="List stored documents",
+    description="Return stored documents newest first with bounded pagination.",
+)
+async def list_document_records(
+    db: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    try:
+        records, total = await run_in_threadpool(list_documents, db, limit, offset)
+    except SQLAlchemyError as exc:
+        logger.error("document_list_failed error=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=SAFE_DB_ERROR_DETAIL,
+        ) from exc
+
+    return DocumentListResponse(
+        items=[DocumentSummary.model_validate(record) for record in records],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get(
+    "/documents/{document_id}",
+    response_model=DocumentDetail,
+    summary="Get a stored document",
+    description=(
+        "Return document metadata, a bounded text preview, the latest extraction, "
+        "the latest decision, and a bounded recent audit slice. The complete stored "
+        "text is never returned."
+    ),
+    responses={404: {"description": "Document not found."}},
+)
+async def get_document_detail(
+    document_id: Annotated[int, ApiPath(ge=1, description="Stored document identifier.")],
+    db: Annotated[Session, Depends(get_db)],
+):
+    settings = get_settings()
+    try:
+        return await run_in_threadpool(
+            _load_document_detail, db, document_id, settings.document_preview_chars
+        )
+    except DocumentNotFoundError:
+        raise
+    except SQLAlchemyError as exc:
+        logger.error("document_detail_failed error=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=SAFE_DB_ERROR_DETAIL,
+        ) from exc
+
+
+@router.get(
+    "/documents/{document_id}/audit",
+    response_model=AuditEventListResponse,
+    summary="List a document's audit trail",
+    description=(
+        "Return one chronological page of a document's append-only audit events. "
+        "Event payloads contain non-sensitive lifecycle facts only."
+    ),
+    responses={404: {"description": "Document not found."}},
+)
+async def list_document_audit_events(
+    document_id: Annotated[int, ApiPath(ge=1, description="Stored document identifier.")],
+    db: Annotated[Session, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    try:
+        document = await run_in_threadpool(get_document, db, document_id)
+        if document is None:
+            raise DocumentNotFoundError()
+        records, total = await run_in_threadpool(
+            list_audit_events, db, document_id, limit, offset
+        )
+    except DocumentNotFoundError:
+        raise
+    except SQLAlchemyError as exc:
+        logger.error("document_audit_list_failed error=%s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=SAFE_DB_ERROR_DETAIL,
+        ) from exc
+
+    return AuditEventListResponse(
+        items=[AuditEvent.model_validate(record) for record in records],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )

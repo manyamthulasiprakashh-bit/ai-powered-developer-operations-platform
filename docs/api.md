@@ -21,7 +21,11 @@ Protected endpoints:
 - `GET /api/analyses/{analysis_id}`
 - `GET /api/statistics`
 - `POST /api/documents`
+- `GET /api/documents`
+- `GET /api/documents/{document_id}`
+- `GET /api/documents/{document_id}/audit`
 - `POST /api/documents/{document_id}/extractions`
+- `POST /api/documents/{document_id}/decisions`
 
 Public endpoints include `/api/health`, `/api/ready`, `/health`, `/ready`,
 `/metrics`, `/docs`, `/redoc`, the root response, and the GitHub read endpoints
@@ -73,7 +77,7 @@ Returns database aggregates: `total_analyses`, `distinct_owners`,
 `distinct_repositories`, `analyses_last_7_days`, `analyses_last_30_days`, and
 `latest_analyzed_at` (null when no analyses exist).
 
-## Document workflow (M0-M3)
+## Document workflow
 
 ### `POST /api/documents`
 
@@ -120,18 +124,54 @@ and success/failure event together in a second transaction.
 The extractor treats document content as data, not instructions. It does not
 call a model or network service.
 
+### `GET /api/documents`
+
+Returns stored documents newest first. Query parameters are `limit` (default
+`20`, range `1`-`100`) and `offset` (default `0`, minimum `0`). The response is
+`{ items, total, limit, offset }`; each item contains document metadata but never
+the stored body.
+
+### `GET /api/documents/{document_id}`
+
+Returns one document's metadata, a bounded `text_preview`, its latest extraction,
+its latest decision, and up to the 50 most recent audit events in chronological
+order. The complete stored body is never returned. An unknown document returns
+`404`.
+
+### `GET /api/documents/{document_id}/audit`
+
+Returns a chronological page of the document's append-only audit trail. Query
+parameters are `limit` (default `20`, range `1`-`100`) and `offset` (default
+`0`, minimum `0`). The response is `{ items, total, limit, offset }`. An unknown
+document returns `404`.
+
+### `POST /api/documents/{document_id}/decisions`
+
+Approves or rejects the latest successful extraction. The body is
+`{ decision, corrections, reason }`, where `decision` is `approve` or `reject`;
+rejections require a non-empty `reason`. A decision is allowed only while the
+document status is `extracted` and its latest extraction succeeded. A document
+may be decided once; later attempts return `409
+document_not_decidable`.
+
+Corrections are stored on the decision and audit trail. They do not mutate the
+original extraction fields. The decision, status change, `fields_corrected`
+event (when corrections are present), and `decision_recorded` event commit
+atomically. The `201` response contains the persisted decision with its actor
+and timestamp.
+
 ## Audit events
 
 The `audit_events` table records document lifecycle events such as
-`document_received`, `extraction_started`, `extraction_succeeded`, and
-`extraction_failed`. There is currently no audit read API or independent audit
-service.
+`document_received`, `extraction_started`, `extraction_succeeded`,
+`extraction_failed`, `fields_corrected`, and `decision_recorded`. Audit events
+are exposed read-only through the document detail and audit endpoints; there is
+no independent audit service.
 
 ## Not implemented yet
 
 - LLM/OpenAI extraction (M4). `OPENAI_API_KEY` and `OPENAI_MODEL` are reserved
   settings and are not used by the current workflow.
-- Document detail, human review/decision, and audit read endpoints.
 - Repository connection, incident analysis, and AI chat endpoints.
 
 ## Error format

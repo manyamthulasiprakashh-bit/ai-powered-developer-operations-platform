@@ -98,7 +98,11 @@ ROUTE_PATTERNS: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("GET", re.compile(r"^/api/analyses/[^/]+$"), "/api/analyses/{analysis_id}"),
     ("GET", re.compile(r"^/api/analyses$"), "/api/analyses"),
     ("GET", re.compile(r"^/api/statistics$"), "/api/statistics"),
+    ("GET", re.compile(r"^/api/documents$"), "/api/documents"),
+    ("GET", re.compile(r"^/api/documents/[^/]+/audit$"), "/api/documents/{document_id}/audit"),
+    ("GET", re.compile(r"^/api/documents/[^/]+$"), "/api/documents/{document_id}"),
     ("POST", re.compile(r"^/api/documents$"), "/api/documents"),
+    ("POST", re.compile(r"^/api/documents/[^/]+/decisions$"), "/api/documents/{document_id}/decisions"),
 )
 
 

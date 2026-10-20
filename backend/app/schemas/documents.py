@@ -149,6 +149,27 @@ class DocumentSummary(BaseModel):
     updated_at: datetime = Field(description="Timestamp of the last status change.")
 
 
+class DocumentListResponse(BaseModel):
+    """One page of document metadata with pagination totals."""
+
+    items: list[DocumentSummary] = Field(default_factory=list, description="Documents in newest-first order.")
+    total: int = Field(ge=0, description="Total number of stored documents.")
+    limit: int = Field(ge=1, description="Maximum number of documents requested.")
+    offset: int = Field(ge=0, description="Number of documents skipped.")
+
+
+class AuditEventListResponse(BaseModel):
+    """One chronological page of a document's audit trail."""
+
+    items: list[AuditEvent] = Field(
+        default_factory=list,
+        description="Audit events in chronological order.",
+    )
+    total: int = Field(ge=0, description="Total number of audit events for the document.")
+    limit: int = Field(ge=1, description="Maximum number of events requested.")
+    offset: int = Field(ge=0, description="Number of events skipped.")
+
+
 class DocumentDetail(DocumentSummary):
     """Document metadata plus its latest extraction, decision, and audit trail."""
 

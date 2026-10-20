@@ -30,6 +30,11 @@ htpasswd -c -m secrets/htpasswd owner      # prompts; writes owner:apr1-hash
 docker compose up --build
 ```
 
+The Nginx process reads `secrets/htpasswd` as UID 101, so make the file readable
+by that numeric user and do not use world-writable permissions. See
+[Required secrets](../README.md#required-secrets) for the supported owner/group
+and `640` mode settings, including the Docker Desktop ownership caveat.
+
 Open `http://localhost:5173` and authenticate with the owner credential. The
 `migrate` service applies Alembic migrations before the API starts. The backend
 and database do not publish host ports.

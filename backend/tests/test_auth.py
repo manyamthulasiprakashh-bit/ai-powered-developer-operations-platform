@@ -14,6 +14,10 @@ PROTECTED_REQUESTS = [
     ("get", "/api/analyses"),
     ("get", "/api/analyses/1"),
     ("get", "/api/statistics"),
+    ("get", "/api/documents"),
+    ("get", "/api/documents/1"),
+    ("get", "/api/documents/1/audit"),
+    ("post", "/api/documents/1/decisions"),
 ]
 
 

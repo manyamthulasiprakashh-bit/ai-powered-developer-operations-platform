@@ -22,6 +22,7 @@ from app.core.exceptions import (
     AuthenticationConfigurationError,
     AuthenticationError,
     DocumentNotFoundError,
+    DocumentNotDecidableError,
     DocumentNotExtractableError,
     DocumentTooLargeError,
     ExtractionOutputError,
@@ -310,6 +311,21 @@ async def document_not_extractable_exception_handler(
             "detail": "Document is not in an extractable state.",
             "error": "document_not_extractable",
             "message": "Document is not in an extractable state.",
+            "retryable": False,
+        },
+    )
+
+
+@app.exception_handler(DocumentNotDecidableError)
+async def document_not_decidable_exception_handler(
+    request: Request, exc: DocumentNotDecidableError
+):
+    return JSONResponse(
+        status_code=status.HTTP_409_CONFLICT,
+        content={
+            "detail": "Document is not in a decidable state.",
+            "error": "document_not_decidable",
+            "message": "Document is not in a decidable state.",
             "retryable": False,
         },
     )

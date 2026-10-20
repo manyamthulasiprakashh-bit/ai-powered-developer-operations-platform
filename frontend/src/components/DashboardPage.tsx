@@ -80,7 +80,16 @@ export function DashboardPage({ onNavigate }: DashboardPageProps) {
             <p className="text-sm uppercase tracking-[0.2em] text-cyan-400">Platform</p>
             <h1 className="mt-2 text-3xl font-bold">AI-Powered Developer Operations</h1>
           </div>
-          <div className={`rounded-full border px-3 py-1 text-sm ${statusPill.className}`}>{statusPill.label}</div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => onNavigate('/documents')}
+              className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-500"
+            >
+              Documents
+            </button>
+            <div className={`rounded-full border px-3 py-1 text-sm ${statusPill.className}`}>{statusPill.label}</div>
+          </div>
         </header>
 
         {error ? (

@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
+from app.core.exceptions import DocumentNotFoundError, DocumentNotDecidableError
 from app.models.documents import (
     DEFAULT_ACTOR,
     AuditEvent,
@@ -273,6 +274,102 @@ def add_decision(
     return _persist(db, record)
 
 
+def record_decision(
+    db: Session,
+    *,
+    document_id: int,
+    decision: str,
+    corrections: list[dict[str, Any]] | None = None,
+    reason: str | None = None,
+    actor: str = DEFAULT_ACTOR,
+    decided_at: datetime | None = None,
+) -> DocumentDecision:
+    """Atomically record a decision for a document's latest successful extraction.
+
+    A decision is only permitted while the document is ``extracted`` and has a
+    latest successful extraction. The conditional status update is the
+    serialization point, so two concurrent reviewers cannot both record a
+    decision. Corrections remain decision metadata; the original extraction is
+    never mutated. The decision, status change, correction event, and decision
+    event commit together or not at all.
+    """
+    if decision not in {"approve", "reject"}:
+        raise ValueError("decision must be 'approve' or 'reject'.")
+
+    now = decided_at or _utcnow()
+    outcome = (
+        DocumentStatus.APPROVED
+        if decision == "approve"
+        else DocumentStatus.REJECTED
+    )
+    corrections_payload = corrections or []
+
+    try:
+        document = db.get(Document, document_id)
+        if document is None:
+            raise DocumentNotFoundError()
+
+        extraction = get_latest_extraction(db, document_id)
+        if extraction is None or extraction.status != "succeeded":
+            raise DocumentNotDecidableError()
+
+        result = db.execute(
+            update(Document)
+            .where(
+                Document.id == document_id,
+                Document.status == DocumentStatus.EXTRACTED,
+            )
+            .values(status=outcome, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise DocumentNotDecidableError()
+
+        record = DocumentDecision(
+            document_id=document_id,
+            extraction_id=extraction.id,
+            decision=outcome,
+            corrections=corrections_payload,
+            reason=reason,
+            actor=actor,
+            decided_at=now,
+        )
+        db.add(record)
+        db.flush()
+
+        if corrections_payload:
+            db.add(
+                AuditEvent(
+                    document_id=document_id,
+                    event_type=AuditEventType.FIELDS_CORRECTED,
+                    actor=actor,
+                    data={
+                        "fields": [
+                            correction["name"] for correction in corrections_payload
+                        ]
+                    },
+                )
+            )
+        db.add(
+            AuditEvent(
+                document_id=document_id,
+                event_type=AuditEventType.DECISION_RECORDED,
+                actor=actor,
+                data={
+                    "decision_id": record.id,
+                    "extraction_id": extraction.id,
+                    "decision": outcome,
+                    "corrections_count": len(corrections_payload),
+                },
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return record
+
+
 def add_audit_event(
     db: Session,
     *,
@@ -311,6 +408,71 @@ def list_documents(db: Session, limit: int, offset: int) -> tuple[list[Document]
     return list(records), total
 
 
+def get_latest_extraction(db: Session, document_id: int) -> DocumentExtraction | None:
+    """Return the most recent extraction attempt for a document, if any."""
+    return db.execute(
+        select(DocumentExtraction)
+        .where(DocumentExtraction.document_id == document_id)
+        .order_by(DocumentExtraction.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def get_latest_decision(db: Session, document_id: int) -> DocumentDecision | None:
+    """Return the most recent human decision for a document, if any."""
+    return db.execute(
+        select(DocumentDecision)
+        .where(DocumentDecision.document_id == document_id)
+        .order_by(DocumentDecision.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+# Document detail embeds only a bounded recent slice of the audit trail; the
+# dedicated audit-read endpoint (a later milestone) returns the full trail.
+DOCUMENT_DETAIL_AUDIT_LIMIT = 50
+
+
+def list_recent_audit_events(
+    db: Session, document_id: int, limit: int = DOCUMENT_DETAIL_AUDIT_LIMIT
+) -> list[AuditEvent]:
+    """Return up to ``limit`` recent audit events in chronological order."""
+    events = (
+        db.execute(
+            select(AuditEvent)
+            .where(AuditEvent.document_id == document_id)
+            .order_by(AuditEvent.id.desc())
+            .limit(limit)
+        )
+        .scalars()
+        .all()
+    )
+    return list(reversed(events))
+
+
+def list_audit_events(
+    db: Session, document_id: int, limit: int, offset: int
+) -> tuple[list[AuditEvent], int]:
+    """Return one chronological page of a document's audit trail with a total."""
+    total = db.execute(
+        select(func.count(AuditEvent.id)).where(
+            AuditEvent.document_id == document_id
+        )
+    ).scalar_one()
+    records = (
+        db.execute(
+            select(AuditEvent)
+            .where(AuditEvent.document_id == document_id)
+            .order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+        .scalars()
+        .all()
+    )
+    return list(records), total
+
+
 def _persist(db: Session, record):
     try:
         db.add(record)
@@ -322,6 +484,7 @@ def _persist(db: Session, record):
 
 
 __all__ = [
+    "DOCUMENT_DETAIL_AUDIT_LIMIT",
     "EXTRACTABLE_STATUSES",
     "EXTRACTION_LEASE_SECONDS",
     "add_audit_event",
@@ -330,7 +493,12 @@ __all__ = [
     "claim_document_for_extraction",
     "create_document",
     "get_document",
+    "get_latest_decision",
+    "get_latest_extraction",
+    "list_audit_events",
     "list_documents",
+    "list_recent_audit_events",
     "mark_extraction_failed",
+    "record_decision",
     "record_extraction_result",
 ]

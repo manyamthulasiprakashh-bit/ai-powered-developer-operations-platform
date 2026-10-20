@@ -48,9 +48,11 @@ npm run dev
 
 `npm run dev` starts Vite only. It can call the public health and GitHub read
 endpoints, but it does not send `X-API-Key` and has no development proxy. Calls
-to analysis creation, analysis history/statistics, document intake, or document
-extraction will return `401` or `503`. Use the Compose/Nginx workflow below for
-those protected flows; do not add `API_KEY` to Vite or browser code.
+to analysis creation, analysis history/statistics, document intake, document
+reads, extraction, or decisions will return `401` or `503`. Use the Compose/Nginx
+workflow below for those protected flows; do not add `API_KEY` to Vite or browser
+code. The document workflow is available at `#/documents`, with review at
+`#/documents/{id}`.
 
 ### Docker Compose
 
@@ -143,7 +145,11 @@ Protected endpoints (`X-API-Key`):
 - `GET /api/analyses/{analysis_id}` — one persisted analysis
 - `GET /api/statistics` — aggregate statistics over persisted analyses
 - `POST /api/documents` — document intake (`.txt`/`.md`, UTF-8, multipart `file`)
+- `GET /api/documents` — stored documents newest first (paginated)
+- `GET /api/documents/{document_id}` — metadata, bounded preview, latest extraction/decision, and recent audit events
+- `GET /api/documents/{document_id}/audit` — chronological document audit trail (paginated)
 - `POST /api/documents/{document_id}/extractions` — deterministic field extraction
+- `POST /api/documents/{document_id}/decisions` — approve or reject the latest successful extraction
 
 Analysis is deterministic and is persisted to PostgreSQL; it does not use OpenAI
 and does not claim to be AI-powered. Document extraction is also deterministic:
@@ -174,6 +180,10 @@ npm run verify:dist
 contain an `X-API-Key` reference, a localhost/loopback API URL, or configured
 secret values. CI currently runs backend tests plus frontend lint/typecheck and
 build; it does not run `verify:dist`.
+
+Current local validation: the backend suite passed with 300 tests and one
+Starlette/httpx deprecation warning; frontend lint, production build, and
+`verify:dist` passed; and `git diff --check` passed.
 
 ## Documentation
 
@@ -218,11 +228,11 @@ The backend container runs Uvicorn on the platform `PORT` as a non-root user. Th
 
 ### Known limitations
 
-PostgreSQL migrations and runtime persistence were not implemented when V2 was written; since V8 they are implemented with Alembic and the `analyses` table, and the M0-M3 document workflow adds the document tables (see [V8 - Database Persistence](#v8---database-persistence) and [M0-M3 - Document Intake and Deterministic Extraction](#m0-m3---document-intake-and-deterministic-extraction)). GitHub reads are async and use a process-local TTL cache since V4. There is no metrics/tracing platform (only in-process counters), and Docker/PostgreSQL execution has not been verified in this environment where Docker is unavailable.
+PostgreSQL migrations and runtime persistence were not implemented when V2 was written; since V8 they are implemented with Alembic and the `analyses` table, and the document workflow adds the document tables (see [V8 - Database Persistence](#v8---database-persistence) and [Document Intake, Extraction, and Review Reads](#document-intake-extraction-and-review-reads)). GitHub reads are async and use a process-local TTL cache since V4. There is no metrics/tracing platform (only in-process counters). Docker Compose, PostgreSQL migrations, and the local runtime stack have since been verified locally; a clean image rebuild and clean-stack recreation remain unverified.
 
 ## V3 - Security & Compliance Hardening
 
-V3 adds environment-validated production CORS, security response headers, configurable process-local rate limiting, bounded and traversal-safe inputs, secret-safe error responses, reusable log redaction, non-root frontend serving, and dependency audit steps in CI. The public health, readiness, metrics, and GitHub read endpoints remain public. Analysis creation, analysis history/statistics, document intake, and document extraction require `X-API-Key`; this is a single shared server-side key, not a user system. Browser clients use the same-origin Nginx proxy so the key never enters frontend assets.
+V3 adds environment-validated production CORS, security response headers, configurable process-local rate limiting, bounded and traversal-safe inputs, secret-safe error responses, reusable log redaction, non-root frontend serving, and dependency audit steps in CI. The public health, readiness, metrics, and GitHub read endpoints remain public. Analysis creation, analysis history/statistics, document intake, extraction, document reads, and document decisions require `X-API-Key`; this is a single shared server-side key, not a user system. Browser clients use the same-origin Nginx proxy so the key never enters frontend assets.
 
 See [docs/security.md](docs/security.md) for the threat model, implemented controls, compliance-oriented design, and known limitations. This is security hardening, not a compliance certification or production security audit.
 
@@ -266,7 +276,7 @@ Backend startup command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT` (the
 
 ### Deployment status and blockers
 
-Deployment is not complete until a public backend host and frontend host are configured and externally verified. This repository does not invent public URLs, provision cloud resources, configure provider credentials, or claim a successful deployment. Docker was unavailable during local validation, and external DNS, TLS, platform environment settings, CORS from the final browser origin, GitHub access, public frontend/backend communication, applying the Alembic migration to a real PostgreSQL instance, and database-aware readiness against live PostgreSQL remain deployment-time checks.
+Deployment is not complete until a public backend host and frontend host are configured and externally verified. This repository does not invent public URLs, provision cloud resources, configure provider credentials, or claim a successful deployment. Docker/PostgreSQL execution has been verified locally, but a clean Docker image rebuild, clean-stack recreation, external DNS, TLS, platform environment settings, CORS from the final browser origin, GitHub access, public frontend/backend communication, and readiness against a managed production database remain deployment-time checks.
 
 ## V8 - Database Persistence
 
@@ -394,30 +404,37 @@ does not apply migrations automatically, so run `alembic upgrade head` first.
 
 ### Verified behavior versus deployment checks
 
-Verified in this repository (Docker was unavailable during validation):
+Verified locally in this repository:
 
-- The full backend test suite, including an end-to-end test that a successful
-  analysis `POST` is persisted and then appears in `GET /api/analyses`, is
-  retrievable from `GET /api/analyses/{id}`, and is reflected in
-  `GET /api/statistics`.
+- The backend suite passed 300 tests with one Starlette/httpx deprecation
+  warning, including analysis persistence and document review coverage.
+- Frontend lint, production build, and distribution verification passed.
+- `git diff --check` and `docker compose config` passed.
+- The local Compose runtime reported healthy PostgreSQL and backend containers;
+  the one-shot migration service completed successfully at revision
+  `0002_create_documents`; and the backend health endpoint returned HTTP 200.
+- Unauthenticated requests to the public frontend and its proxied health
+  endpoint returned HTTP 401 as expected under Basic Auth.
+- The authenticated browser workflow was exercised for document upload,
+  deterministic extraction, approval, rejection with a required reason, and
+  persisted audit history.
 - Migration tests apply `alembic upgrade head` and downgrade against a temporary
   SQLite database, including preservation of existing analysis rows.
-- Frontend typecheck and production build.
 
-Not yet verified — still requires a real Docker/PostgreSQL test:
+Not yet verified:
 
-- `docker compose up --build` end-to-end, including the `migrate` service ordering.
-- Applying the migration against real PostgreSQL (only SQLite migrations have
-  been exercised).
-- The database-aware readiness probe returning `503` against a genuinely
-  unreachable PostgreSQL server.
-- Nginx template rendering, Basic Auth, request-size enforcement, and the
-  container guard at runtime.
+- A clean Docker image rebuild.
+- A clean-stack recreation with fresh containers and volumes.
+- The database-aware readiness probe returning `503` against an unreachable
+  PostgreSQL server.
+- Container guard fail-fast behavior for missing or unreadable secrets, and
+  runtime request-size enforcement.
 
-## M0-M3 - Document Intake and Deterministic Extraction
+## Document Intake, Extraction, and Review Reads
 
-The document workflow is implemented through M3. Both endpoints are protected by
-the same `X-API-Key` boundary as analysis creation:
+The document workflow supports intake, deterministic extraction, and read-only
+review. All document endpoints are protected by the same `X-API-Key` boundary as
+analysis creation:
 
 - `POST /api/documents` accepts one multipart `file` containing a `.txt` or `.md`
   document encoded as UTF-8. It validates the extension, media type, UTF-8
@@ -432,10 +449,17 @@ the same `X-API-Key` boundary as analysis creation:
   evidence with Unicode offsets, warnings, and `provider: "deterministic"`.
   Extraction records and audit events are committed atomically with the
   document status.
+- `GET /api/documents` lists stored documents newest first with bounded
+  pagination. `GET /api/documents/{document_id}` returns metadata, a bounded
+  preview, the latest extraction and decision, and a bounded recent audit slice.
+  `GET /api/documents/{document_id}/audit` returns a chronological page of the
+  append-only audit trail. The complete stored body is never returned.
+- `POST /api/documents/{document_id}/decisions` approves or rejects the latest
+  successful extraction while the document is `extracted`. Rejections require a
+  reason. Corrections are recorded on the decision and audit trail without
+  changing the original extraction. Decisions are one-time; later attempts
+  return `409 document_not_decidable`.
 
-The `audit_events` table is written by intake and extraction, but there is no
-audit read API. Document detail, human correction/decision, and review endpoints
-are not implemented; their schemas/models exist as persistence foundations.
 M4/LLM extraction is not implemented: the extractor does not call OpenAI or any
 network model, and `OPENAI_API_KEY`/`OPENAI_MODEL` are unused. See
 [docs/api.md](docs/api.md) for the field rules and error responses.
@@ -490,6 +514,22 @@ server-side, behind an owner Basic Auth gate.
   printf 'owner:%s\n' "$(openssl passwd -apr1 'your-owner-password')" > secrets/htpasswd
   ```
 
+  The container's unprivileged Nginx process reads this file as UID 101, so its
+  numeric ownership and permissions must allow that user to read it. The Compose
+  file documents the supported options: owner UID 101, or group GID 0, with mode
+  `640`. Check the numeric ownership with `ls -ln secrets/htpasswd`; on a Linux
+  host you can set the documented owner/group and mode with:
+
+  ```bash
+  sudo chown 101:0 secrets/htpasswd
+  chmod 640 secrets/htpasswd
+  ```
+
+  Do not use world-writable permissions. Docker Desktop handles bind-mount
+  ownership through its file-sharing layer, so confirm the container can read the
+  mounted file rather than assuming host numeric IDs map directly. The entrypoint
+  fails fast if the file is unreadable or malformed.
+
   `secrets/` is gitignored and must stay out of version control. The frontend
   container refuses to start (fail-fast) when `API_KEY` is missing, unsafe, or out
   of range, or when the htpasswd path is missing, a directory, unreadable, empty,
@@ -541,12 +581,21 @@ server-side, behind an owner Basic Auth gate.
 
 ### Container verification status
 
-Docker was unavailable during validation, so the following are explicitly
-unverified and must be checked on a machine with Docker: that the image renders
-`/etc/nginx/templates/default.conf.template` into `/etc/nginx/conf.d/default.conf`,
-that the guard exits non-zero when secrets are absent, that `auth_basic` gates
-both the SPA and `/api/`, and that `docker compose config` and
-`docker compose up --build` succeed. The image family was confirmed (from the
-upstream `nginx`/`nginx-unprivileged` Dockerfiles) to install `envsubst`, ship
-`/docker-entrypoint.d/20-envsubst-on-templates.sh`, keep the entrypoint, and own
-`/etc/nginx` as the unprivileged user.
+Local Compose runtime checks passed: `docker compose config` succeeded; the
+PostgreSQL and backend containers reported healthy; the one-shot migration
+service completed at revision `0002_create_documents`; the backend health
+endpoint returned HTTP 200; unauthenticated requests to the frontend and its
+proxied health endpoint returned HTTP 401 as expected; and the authenticated
+browser workflow completed upload, deterministic extraction, approval, rejection
+with a required reason, and persisted audit history. The runtime behavior
+confirms that the image rendered
+`/etc/nginx/templates/default.conf.template` into
+`/etc/nginx/conf.d/default.conf` and that `auth_basic` gates both the SPA and
+`/api/`.
+
+Not yet verified: a clean Docker image rebuild, clean-stack recreation with fresh
+containers and volumes, the guard's non-zero exit path when secrets are absent or
+unreadable, and runtime request-size enforcement. The image family was confirmed
+(from the upstream `nginx`/`nginx-unprivileged` Dockerfiles) to install
+`envsubst`, ship `/docker-entrypoint.d/20-envsubst-on-templates.sh`, keep the
+entrypoint, and own `/etc/nginx` as the unprivileged user.

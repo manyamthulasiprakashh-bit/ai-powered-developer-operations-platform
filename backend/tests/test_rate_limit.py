@@ -41,6 +41,10 @@ def test_repository_paths_normalize_to_a_single_route_category():
     assert categorize_request("GET", "/api/github/repositories/a/b/commits") == "/api/github/repositories/{owner}/{repo}/commits"
     assert categorize_request("POST", "/api/github/repositories/a/b/analysis") == "/api/github/repositories/{owner}/{repo}/analysis"
     assert categorize_request("GET", "/api/analyses/123") == "/api/analyses/{analysis_id}"
+    assert categorize_request("GET", "/api/documents") == "/api/documents"
+    assert categorize_request("GET", "/api/documents/123") == "/api/documents/{document_id}"
+    assert categorize_request("GET", "/api/documents/123/audit") == "/api/documents/{document_id}/audit"
+    assert categorize_request("POST", "/api/documents/123/decisions") == "/api/documents/{document_id}/decisions"
     assert categorize_request("GET", "/unmatched/path") == "other"
 
 
