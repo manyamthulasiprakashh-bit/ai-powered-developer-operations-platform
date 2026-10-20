@@ -1,12 +1,12 @@
 # Rendered by the nginx image entrypoint (envsubst) into
 # /etc/nginx/conf.d/default.conf at container start.
 #
-# ${API_KEY} is the only backed-by-an-environment-variable token written with
-# braces in this template. The stock entrypoint substitutes defined environment
-# variables and preserves native nginx variables such as $remote_addr and $uri
-# below (these lowercase names are not expected to exist as environment
-# variables). The backend API key is injected here, server-side, and never
-# reaches the browser.
+# The server-side API key and backend upstream are environment-backed tokens
+# used below. The stock entrypoint substitutes defined environment variables and
+# preserves native nginx variables such as $remote_addr, $proxy_host, and $uri
+# (these lowercase names are not expected to exist as environment variables).
+# The backend API key is injected here, server-side, and never reaches the
+# browser.
 server {
     listen 8080;
     server_name _;
@@ -20,7 +20,7 @@ server {
 
     # Same-origin API proxy. The backend requires X-API-Key; it is added here.
     location /api/ {
-        proxy_pass http://backend:8000;
+        proxy_pass ${BACKEND_UPSTREAM};
         proxy_http_version 1.1;
         # Explicit upload ceiling. The application caps the whole document
         # request at DOCUMENT_MAX_SIZE_BYTES + DOCUMENT_MULTIPART_OVERHEAD_BYTES
@@ -29,7 +29,8 @@ server {
         # the backend still enforces the exact file limit. If either setting is
         # raised, keep this value above their sum.
         client_max_body_size 2m;
-        proxy_set_header Host $host;
+        proxy_set_header Host $proxy_host;
+        proxy_ssl_server_name on;
         # Overwrite (never append) client-supplied forwarding headers so a
         # client cannot spoof its identity. The backend trusts this peer only
         # because it is listed in TRUSTED_PROXY_IPS.

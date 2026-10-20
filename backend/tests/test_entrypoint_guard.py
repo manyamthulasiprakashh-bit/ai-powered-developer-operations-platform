@@ -15,6 +15,7 @@ def _run_guard(
     tmp_path,
     *,
     api_key=VALID_KEY,
+    backend_upstream="http://backend:8000",
     htpasswd=HTPASSWD_LINE,
     make_dir=False,
     render_secret=None,
@@ -22,8 +23,11 @@ def _run_guard(
 ):
     env = dict(os.environ)
     env.pop("API_KEY", None)
+    env.pop("BACKEND_UPSTREAM", None)
     if api_key is not None:
         env["API_KEY"] = api_key
+    if backend_upstream is not None:
+        env["BACKEND_UPSTREAM"] = backend_upstream
 
     htpasswd_path = tmp_path / "htpasswd"
     if make_dir:
@@ -54,6 +58,69 @@ def test_guard_execs_entrypoint_with_valid_secrets(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert marker.exists()
+
+
+@pytest.mark.parametrize(
+    "backend_upstream",
+    [
+        "http://backend:8000",
+        "https://backend.onrender.com",
+        "http://backend-abcd1234:10000",
+        "https://backend.onrender.com:443",
+        "http://backend:65535",
+        "http://127.0.0.1:8000",
+    ],
+)
+def test_guard_accepts_http_and_https_backend_upstreams(tmp_path, backend_upstream):
+    result, marker = _run_guard(tmp_path, backend_upstream=backend_upstream)
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+
+
+@pytest.mark.parametrize("backend_upstream", [None, ""])
+def test_guard_rejects_missing_backend_upstream(tmp_path, backend_upstream):
+    result, marker = _run_guard(tmp_path, backend_upstream=backend_upstream)
+
+    assert result.returncode == 1
+    assert "BACKEND_UPSTREAM is not set" in result.stderr
+    assert VALID_KEY not in result.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize(
+    "backend_upstream",
+    [
+        "backend:8000",
+        "ftp://backend:8000",
+        "http://",
+        "http:///api",
+        "http://backend:8000/",
+        "http://backend:8000/api",
+        "http://backend:8000?query=1",
+        "http://backend:8000#fragment",
+        "http://backend:",
+        "http://:8000",
+        "http://backend:0",
+        "http://backend:65536",
+        "http://backend:80:90",
+        "http://user@backend:8000",
+        "http://backend:8000;",
+        "http://backend:8000\n",
+        "http://back end:8000",
+        "http://backend..example.com:8000",
+        "http://-backend:8000",
+        "http://backend-:8000",
+    ],
+)
+def test_guard_rejects_malformed_backend_upstream(tmp_path, backend_upstream):
+    result, marker = _run_guard(tmp_path, backend_upstream=backend_upstream)
+
+    assert result.returncode == 1
+    assert "BACKEND_UPSTREAM" in result.stderr
+    assert "FATAL" in result.stderr
+    assert VALID_KEY not in result.stderr
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize("api_key", [None, ""])

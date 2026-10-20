@@ -95,12 +95,14 @@ docker compose up --build
 ```
 
 Docker Compose v2.24.0 or newer is required. The Compose demo pins the backend to
-port 8000: the backend healthcheck and the Nginx proxy upstream both target 8000.
-Compose sets both `PORT` and the legacy `BACKEND_PORT` alias (accepted by
+port 8000: the backend healthcheck and the frontend `BACKEND_UPSTREAM` both target
+8000. Compose sets both `PORT` and the legacy `BACKEND_PORT` alias (accepted by
 `backend/app/core/config.py`) to `8000` so a stray `.env` value cannot move the
-backend. Changing the port means updating both variables, the healthcheck URL, and
-the Nginx upstream together. Platform (non-Compose) deployments still use the
-platform-provided `PORT`.
+backend, and pins the frontend `BACKEND_UPSTREAM` to
+`http://backend:8000`. Changing the port means updating both variables, the
+healthcheck URL, and `BACKEND_UPSTREAM` together. Platform (non-Compose)
+deployments still use the platform-provided `PORT` and must set
+`BACKEND_UPSTREAM` on the frontend service.
 
 PostgreSQL data is stored in the named `db_data` volume: `docker compose down`
 removes the containers but preserves the volume and its data, while
@@ -150,10 +152,31 @@ VITE_API_BASE_URL=https://<backend-host>
 ```
 
 For the V9 same-origin topology, build with `VITE_API_BASE_URL=/` and keep the
-backend unexposed behind the frontend Nginx proxy. The value must be configured
-before the frontend image build because Vite embeds it into the static assets.
-The frontend service does not need a runtime environment variable for this
-setting.
+backend unexposed behind the frontend Nginx proxy where private networking is
+available. The value must be configured before the frontend image build because
+Vite embeds it into the static assets.
+
+The frontend also needs the runtime variable `BACKEND_UPSTREAM`, which the Nginx
+entrypoint substitutes into `proxy_pass`:
+
+```text
+BACKEND_UPSTREAM=http://<backend-internal-host>:<port>
+```
+
+Use the backend service's **Connect > Internal** address from the Render
+dashboard. Private networking requires the same region and workspace, and free
+web services cannot receive private-network traffic. If private networking is
+unavailable, use the backend's public HTTPS origin instead:
+
+```text
+BACKEND_UPSTREAM=https://<backend-host>
+```
+
+`BACKEND_UPSTREAM` must be an origin only: no path, query, fragment, or trailing
+slash. Compose sets it to `http://backend:8000`. `VITE_API_BASE_URL` remains `/`
+for this topology; changing it to the backend URL would bypass the Nginx proxy
+and its server-side `X-API-Key` injection. The frontend entrypoint fails closed
+if `BACKEND_UPSTREAM` is missing or malformed.
 
 ## Production smoke tests
 

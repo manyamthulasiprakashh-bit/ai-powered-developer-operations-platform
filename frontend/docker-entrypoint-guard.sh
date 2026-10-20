@@ -16,6 +16,62 @@ HTPASSWD_FILE="${HTPASSWD_FILE:-/etc/nginx/auth/htpasswd}"
 RENDER_HTPASSWD_FILE="${RENDER_HTPASSWD_FILE:-/etc/secrets/htpasswd}"
 DOCKER_ENTRYPOINT="${DOCKER_ENTRYPOINT:-/docker-entrypoint.sh}"
 
+# BACKEND_UPSTREAM is interpolated unescaped into an nginx `proxy_pass`
+# directive. Require an origin only: no path, query, fragment, trailing slash,
+# credentials, whitespace, or directive-breaking characters. Compose supplies
+# the backend service address; Render supplies the backend's private or public
+# origin.
+upstream="${BACKEND_UPSTREAM:-}"
+case "$upstream" in
+    '')
+        echo "[entrypoint] FATAL: BACKEND_UPSTREAM is not set; refusing to start the proxy." >&2
+        exit 1
+        ;;
+    http://*|https://*) ;;
+    *)
+        echo "[entrypoint] FATAL: BACKEND_UPSTREAM must use http:// or https://." >&2
+        exit 1
+        ;;
+esac
+
+authority="${upstream#*://}"
+case "$authority" in
+    ''|*/*|*\?*|*\#*|*[!A-Za-z0-9.:-]*)
+        echo "[entrypoint] FATAL: BACKEND_UPSTREAM must be an HTTP(S) origin with a hostname and optional port, no path, query, fragment, or trailing slash." >&2
+        exit 1
+        ;;
+    *:*:*|*:)
+        echo "[entrypoint] FATAL: BACKEND_UPSTREAM has an invalid host or port." >&2
+        exit 1
+        ;;
+    *:*)
+        host="${authority%:*}"
+        port="${authority##*:}"
+        ;;
+    *)
+        host="$authority"
+        port=""
+        ;;
+esac
+case "$host" in
+    ''|.*|*.|*..*|-*|*-|*.-*|*-.*|*[!A-Za-z0-9.-]*)
+        echo "[entrypoint] FATAL: BACKEND_UPSTREAM has an invalid hostname." >&2
+        exit 1
+        ;;
+esac
+if [ -n "$port" ]; then
+    case "$port" in
+        0*|*[!0-9]*)
+            echo "[entrypoint] FATAL: BACKEND_UPSTREAM has an invalid port." >&2
+            exit 1
+            ;;
+    esac
+    if [ "$port" -gt 65535 ]; then
+        echo "[entrypoint] FATAL: BACKEND_UPSTREAM port must be between 1 and 65535." >&2
+        exit 1
+    fi
+fi
+
 # API_KEY is interpolated unescaped into an nginx `proxy_set_header` directive,
 # so it must not contain characters that can terminate the directive (notably
 # `;`, `{`, `}`, quotes, whitespace, `$`, or newlines). Intended value is

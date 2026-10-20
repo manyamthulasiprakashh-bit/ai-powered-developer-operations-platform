@@ -30,12 +30,12 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-dev-only-password}@db:5432/devops_platform
       # The Compose demo pins the backend to 8000: the healthcheck below and the
-      # Nginx proxy upstream (frontend/nginx.conf.template) both target 8000. Both
-      # PORT and the legacy BACKEND_PORT alias (accepted by
-      # backend/app/core/config.py) are pinned so a stray value in .env cannot move
-      # the backend. Changing this port requires updating all four: PORT,
-      # BACKEND_PORT, the healthcheck URL, and the Nginx upstream. Non-Compose
-      # deployments still receive their own PORT from the hosting platform.
+      # frontend BACKEND_UPSTREAM both target 8000. Both PORT and the legacy
+      # BACKEND_PORT alias (accepted by backend/app/core/config.py) are pinned so
+      # a stray value in .env cannot move the backend. Changing this port requires
+      # updating all four: PORT, BACKEND_PORT, the healthcheck URL, and the
+      # frontend BACKEND_UPSTREAM. Non-Compose deployments still receive their own
+      # PORT from the hosting platform.
       PORT: "8000"
       BACKEND_PORT: "8000"
       # Only the frontend proxy may set forwarding headers. Must match the
@@ -71,6 +71,10 @@ services:
       # Injected into the Nginx proxy config only; never placed in frontend
       # assets, browser storage, or responses.
       API_KEY: ${API_KEY:-}
+      # Compose keeps the local service name and pinned backend port. Render
+      # overrides this on the frontend service with the backend's private or
+      # public origin.
+      BACKEND_UPSTREAM: http://backend:8000
     volumes:
       # Owner credential as one `user:hash` line (e.g. `owner:$apr1$...`).
       # Generate outside the image; never commit. See README and .env.example.

@@ -90,13 +90,16 @@ Required variables for production deployment:
 - `GITHUB_TOKEN`: optional GitHub token for higher rate limits; keep it out of source control
 - `DATABASE_URL`: required for persistence, readiness, and the database-backed endpoints
 - `API_KEY`: server-side key required by analysis creation, analysis history/statistics, and document intake/extraction
-- `VITE_API_BASE_URL`: frontend API base URL; use `/` for the same-origin Compose/Nginx demo, or the exact backend origin for split hosting
+- `VITE_API_BASE_URL`: frontend build-time API base URL; use `/` for the same-origin Compose/Nginx demo, or the exact backend origin for split hosting
+- `BACKEND_UPSTREAM`: frontend Nginx runtime upstream for the V9 same-origin topology; Compose sets `http://backend:8000`, while Render uses the backend's private-network address or public HTTPS origin
 
 For split hosting, set `CORS_ALLOWED_ORIGINS` to the exact frontend origin and
 `VITE_API_BASE_URL` to the exact backend origin. The Render hostnames in older
 examples are deployment examples, not endpoints verified by this repository;
-replace them with your actual service origins. For the V9 same-origin
-topology, use `VITE_API_BASE_URL=/` and keep the backend unexposed. See
+replace them with your actual service origins. For the V9 same-origin topology,
+use `VITE_API_BASE_URL=/` and set `BACKEND_UPSTREAM` on the frontend service to
+the backend's private or public Render origin. Keep the backend unexposed where
+the platform supports private-only services. See
 [docs/development.md](docs/development.md) for the development workflow and
 smoke tests.
 
@@ -112,7 +115,10 @@ This project supports two deployment shapes:
    a server-side proxy so the browser never holds `API_KEY`.
 2. **Same-origin demo (V9):** run the Compose/Nginx topology, which serves the SPA
    and proxies `/api/` with the key added server-side behind owner Basic Auth.
-   Build with `VITE_API_BASE_URL=/` and keep the backend unexposed.
+   Build with `VITE_API_BASE_URL=/` and set `BACKEND_UPSTREAM` on the frontend
+   service. Compose uses `http://backend:8000`; Render uses the backend's
+   private-network address or public HTTPS origin. Keep the backend unexposed
+   where the platform supports private-only services.
 
 PostgreSQL and `alembic upgrade head` are required for the database-backed
 workflow. Keep the GitHub integration unchanged and rely on the public GitHub
@@ -210,7 +216,7 @@ development values.
 
 ### Production deployment
 
-No deployment is performed or claimed by this repository. A deployment must provide `PORT`, set `APP_ENV=production` and `APP_DEBUG=false`, configure `CORS_ALLOWED_ORIGINS` with real service origins, and set `VITE_API_BASE_URL` to `/` for the same-origin proxy or to the exact backend origin for split hosting. Provide secrets through the platform secret store. Do not use the local PostgreSQL password in production.
+No deployment is performed or claimed by this repository. A deployment must provide `PORT`, set `APP_ENV=production` and `APP_DEBUG=false`, configure `CORS_ALLOWED_ORIGINS` with real service origins, and set `VITE_API_BASE_URL` to `/` for the same-origin proxy or to the exact backend origin for split hosting. For the same-origin proxy, also set `BACKEND_UPSTREAM` on the frontend service to the backend's private or public origin; Compose sets `http://backend:8000` locally. Provide secrets through the platform secret store. Do not use the local PostgreSQL password in production.
 
 ### Health, readiness, and logging
 
@@ -268,7 +274,7 @@ The V7 split-hosting pattern deploys two independently managed services: a FastA
 
 For the backend service, set `APP_ENV=production`, `APP_DEBUG=false`, `CORS_ALLOWED_ORIGINS` to the exact HTTPS frontend origin, and allow the hosting platform to provide `PORT`. Set `DATABASE_URL` for the managed PostgreSQL instance. Configure the existing GitHub, timeout, cache, retry, circuit-breaker, rate-limit, and logging variables from `.env.example` as needed. Keep `GITHUB_TOKEN`, database credentials, and other secrets in the platform secret store.
 
-For split hosting, set the frontend build variable `VITE_API_BASE_URL` to the exact public HTTPS backend origin. For the V9 same-origin demo, use the `/` sentinel instead and let the frontend Nginx proxy `/api/` to the backend. No frontend secret belongs in a `VITE_*` variable because Vite embeds those values into browser assets. Production builds fail when this variable is absent; localhost is retained only for local development and Compose defaults.
+For split hosting, set the frontend build variable `VITE_API_BASE_URL` to the exact public HTTPS backend origin. For the V9 same-origin demo, use the `/` sentinel instead and set the frontend runtime variable `BACKEND_UPSTREAM` to the backend's private-network address or public HTTPS origin so Nginx can proxy `/api/`. No frontend secret belongs in a `VITE_*` variable because Vite embeds those values into browser assets. Production builds fail when this variable is absent; localhost is retained only for local development and Compose defaults.
 
 ### Deployment commands and checks
 
@@ -474,11 +480,13 @@ server-side, behind an owner Basic Auth gate.
 
 ### Topology
 
-- `frontend` (unprivileged Nginx) is the only published service (`5173:8080`).
-  It serves the built SPA at `/` and reverse-proxies `/api/` to
-  `http://backend:8000`, injecting `X-API-Key` from the `API_KEY` environment
+- `frontend` (unprivileged Nginx) is the only published Compose service
+  (`5173:8080`). It serves the built SPA at `/` and reverse-proxies `/api/` to
+  `BACKEND_UPSTREAM`, injecting `X-API-Key` from the `API_KEY` environment
   variable at container start (rendered into the Nginx config by the image
-  entrypoint; never written into frontend assets).
+  entrypoint; never written into frontend assets). Compose sets
+  `BACKEND_UPSTREAM=http://backend:8000`; Render sets it to the backend's
+  private-network address or public HTTPS origin.
 - The entire server, including `/api/`, is protected by Nginx `auth_basic`
   using a single owner credential, so the proxy is not an open relay and the
   protected endpoints are not public.
@@ -487,6 +495,15 @@ server-side, behind an owner Basic Auth gate.
   internal `data` network.
 - The SPA is built with `VITE_API_BASE_URL=/`, so it issues relative `/api/...`
   requests to the same origin.
+
+On Render, set `BACKEND_UPSTREAM` on the **frontend** service to the backend's
+address shown under **Connect > Internal**, for example
+`http://backend-abcd:10000`. Private networking requires the same region and
+workspace, and free web services cannot receive private-network traffic. If
+private networking is unavailable, use the backend's public HTTPS origin, for
+example `https://backend-abcd.onrender.com`. Use an origin with no path, query,
+fragment, or trailing slash. Do not change `VITE_API_BASE_URL` from `/` for
+this topology.
 
 ### Required secrets
 
@@ -571,8 +588,9 @@ server-side, behind an owner Basic Auth gate.
 
 - `docker compose up --build` runs the public-demo topology (proxy + Basic Auth,
   no published backend/db ports, relative API base). Create `secrets/htpasswd`
-  and set `API_KEY` in `.env` first. This is the supported local workflow for
-  protected analysis, history, statistics, and document endpoints.
+  and set `API_KEY` in `.env` first. Compose pins the frontend
+  `BACKEND_UPSTREAM` to `http://backend:8000`. This is the supported local
+  workflow for protected analysis, history, statistics, and document endpoints.
 - Backend-only local development is supported: run PostgreSQL, apply
   `alembic upgrade head`, set `API_KEY`, start `uvicorn app.main:app --reload`,
   and call protected endpoints with `curl -H "X-API-Key: $API_KEY"`. Public
