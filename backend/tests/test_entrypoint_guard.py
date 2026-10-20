@@ -11,7 +11,15 @@ VALID_KEY = "a" * 64
 HTPASSWD_LINE = "owner:$apr1$abc$def\n"
 
 
-def _run_guard(tmp_path, *, api_key=VALID_KEY, htpasswd=HTPASSWD_LINE, make_dir=False):
+def _run_guard(
+    tmp_path,
+    *,
+    api_key=VALID_KEY,
+    htpasswd=HTPASSWD_LINE,
+    make_dir=False,
+    render_secret=None,
+    render_secret_mode=None,
+):
     env = dict(os.environ)
     env.pop("API_KEY", None)
     if api_key is not None:
@@ -23,6 +31,13 @@ def _run_guard(tmp_path, *, api_key=VALID_KEY, htpasswd=HTPASSWD_LINE, make_dir=
     elif htpasswd is not None:
         htpasswd_path.write_text(htpasswd, encoding="utf-8")
     env["HTPASSWD_FILE"] = str(htpasswd_path)
+
+    render_path = tmp_path / "render-htpasswd"
+    if render_secret is not None:
+        render_path.write_text(render_secret, encoding="utf-8")
+        if render_secret_mode is not None:
+            render_path.chmod(render_secret_mode)
+    env["RENDER_HTPASSWD_FILE"] = str(render_path)
 
     marker = tmp_path / "entrypoint-ran"
     stub = tmp_path / "entrypoint.sh"
@@ -100,4 +115,74 @@ def test_guard_rejects_htpasswd_without_a_user_hash_entry(tmp_path):
 
     assert result.returncode == 1
     assert "user:hash" in result.stderr
+    assert not marker.exists()
+
+
+def test_guard_bridges_render_secret_when_expected_path_is_absent(tmp_path):
+    result, marker = _run_guard(tmp_path, htpasswd=None, render_secret=HTPASSWD_LINE)
+    expected_path = tmp_path / "htpasswd"
+    render_path = tmp_path / "render-htpasswd"
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+    assert expected_path.is_symlink()
+    assert os.readlink(expected_path) == str(render_path)
+
+
+def test_guard_preserves_existing_bind_mount_over_render_secret(tmp_path):
+    result, marker = _run_guard(
+        tmp_path,
+        htpasswd=HTPASSWD_LINE,
+        render_secret="render:$apr1$other$value\n",
+    )
+    expected_path = tmp_path / "htpasswd"
+
+    assert result.returncode == 0, result.stderr
+    assert marker.exists()
+    assert expected_path.is_file()
+    assert not expected_path.is_symlink()
+    assert expected_path.read_text(encoding="utf-8") == HTPASSWD_LINE
+
+
+def test_guard_rejects_missing_render_secret_and_expected_path(tmp_path):
+    result, marker = _run_guard(tmp_path, htpasswd=None)
+    expected_path = tmp_path / "htpasswd"
+
+    assert result.returncode == 1
+    assert "is missing" in result.stderr
+    assert not expected_path.exists()
+    assert not expected_path.is_symlink()
+    assert not marker.exists()
+
+
+def test_guard_rejects_invalid_render_secret(tmp_path):
+    result, marker = _run_guard(
+        tmp_path,
+        htpasswd=None,
+        render_secret="not-a-valid-entry\n",
+    )
+    expected_path = tmp_path / "htpasswd"
+
+    assert result.returncode == 1
+    assert "user:hash" in result.stderr
+    assert expected_path.is_symlink()
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0,
+    reason="root bypasses file permission checks",
+)
+def test_guard_rejects_unreadable_render_secret(tmp_path):
+    result, marker = _run_guard(
+        tmp_path,
+        htpasswd=None,
+        render_secret=HTPASSWD_LINE,
+        render_secret_mode=0o000,
+    )
+    expected_path = tmp_path / "htpasswd"
+
+    assert result.returncode == 1
+    assert "not readable by the nginx user" in result.stderr
+    assert expected_path.is_symlink()
     assert not marker.exists()

@@ -18,8 +18,10 @@ dist/
 coverage/
 .nyc_output/
 
-# Local secrets and logs
+# Local secrets and logs. Render copies Secret Files into the Docker build
+# context, so exclude the runtime htpasswd filename as well.
 secrets/
+htpasswd
 *.log
 .DS_Store
 

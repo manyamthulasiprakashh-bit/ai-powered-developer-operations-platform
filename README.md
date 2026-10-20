@@ -181,7 +181,7 @@ contain an `X-API-Key` reference, a localhost/loopback API URL, or configured
 secret values. CI currently runs backend tests plus frontend lint/typecheck and
 build; it does not run `verify:dist`.
 
-Current local validation: the backend suite passed with 300 tests and one
+Current local validation: the backend suite passed with 305 tests and one
 Starlette/httpx deprecation warning; frontend lint, production build, and
 `verify:dist` passed; and `git diff --check` passed.
 
@@ -406,7 +406,7 @@ does not apply migrations automatically, so run `alembic upgrade head` first.
 
 Verified locally in this repository:
 
-- The backend suite passed 300 tests with one Starlette/httpx deprecation
+- The backend suite passed 305 tests with one Starlette/httpx deprecation
   warning, including analysis persistence and document review coverage.
 - Frontend lint, production build, and distribution verification passed.
 - `git diff --check` and `docker compose config` passed.
@@ -494,10 +494,20 @@ server-side, behind an owner Basic Auth gate.
   frontend Nginx entrypoint accepts only `[A-Za-z0-9_-]` with a length of 16-128
   characters because the value is injected into its config. Never put it in
   `VITE_*`, frontend code, browser storage, or responses.
-- Owner Basic Auth credential: a single `user:hash` line mounted read-only at
-  `/etc/nginx/auth/htpasswd` (the examples use the username `owner`). Generate it
-  outside the image and do not commit it. The Nginx image does not ship
-  `htpasswd`, so use a host tool:
+- Owner Basic Auth credential: a single `user:hash` line (the examples use the
+  username `owner`). Generate it outside the image and do not commit it. Delivery
+  differs by environment:
+  - **Compose:** bind-mount the file read-only at
+    `/etc/nginx/auth/htpasswd`.
+  - **Render:** add a Secret File named `htpasswd`. Render mounts it at
+    `/etc/secrets/htpasswd`; the frontend entrypoint creates a symlink at
+    `/etc/nginx/auth/htpasswd` only when the bind-mounted path is absent. Render
+    exposes Secret Files through group GID 1000, and the image adds the
+    unprivileged nginx user (UID 101) to that group. Leave `HTPASSWD_FILE` unset
+    on Render; it is a test-only override and does not change the Nginx template
+    path.
+
+  The Nginx image does not ship `htpasswd`, so use a host tool:
 
   ```bash
   mkdir -p secrets
@@ -514,11 +524,12 @@ server-side, behind an owner Basic Auth gate.
   printf 'owner:%s\n' "$(openssl passwd -apr1 'your-owner-password')" > secrets/htpasswd
   ```
 
-  The container's unprivileged Nginx process reads this file as UID 101, so its
-  numeric ownership and permissions must allow that user to read it. The Compose
-  file documents the supported options: owner UID 101, or group GID 0, with mode
-  `640`. Check the numeric ownership with `ls -ln secrets/htpasswd`; on a Linux
-  host you can set the documented owner/group and mode with:
+  For the Compose bind mount, the unprivileged Nginx process reads this file as
+  UID 101, so its numeric ownership and permissions must allow that user to read
+  it. The Compose file documents the supported options: owner UID 101, or group
+  GID 0, with mode `640`. Check the numeric ownership with
+  `ls -ln secrets/htpasswd`; on a Linux host you can set the documented
+  owner/group and mode with:
 
   ```bash
   sudo chown 101:0 secrets/htpasswd
@@ -527,13 +538,18 @@ server-side, behind an owner Basic Auth gate.
 
   Do not use world-writable permissions. Docker Desktop handles bind-mount
   ownership through its file-sharing layer, so confirm the container can read the
-  mounted file rather than assuming host numeric IDs map directly. The entrypoint
-  fails fast if the file is unreadable or malformed.
+  mounted file rather than assuming host numeric IDs map directly. For Render,
+  the Secret File mount controls permissions and the image's GID 1000 membership
+  supplies read access; no host `chmod` is involved. The entrypoint fails fast if
+  the file is unreadable or malformed.
 
-  `secrets/` is gitignored and must stay out of version control. The frontend
-  container refuses to start (fail-fast) when `API_KEY` is missing, unsafe, or out
-  of range, or when the htpasswd path is missing, a directory, unreadable, empty,
-  or lacks a `user:hash` line.
+  `secrets/` is gitignored and must stay out of version control. The Render
+  Secret File is stored in Render rather than the repository, and
+  `frontend/.dockerignore` excludes a build-context file named `htpasswd` so it
+  cannot be baked into the image. The frontend container refuses to start
+  (fail-fast) when `API_KEY` is missing, unsafe, or out of range, or when the
+  htpasswd path is missing, a directory, unreadable, empty, or lacks a
+  `user:hash` line.
 
 ### Security assumptions
 
@@ -593,9 +609,12 @@ confirms that the image rendered
 `/etc/nginx/conf.d/default.conf` and that `auth_basic` gates both the SPA and
 `/api/`.
 
-Not yet verified: a clean Docker image rebuild, clean-stack recreation with fresh
-containers and volumes, the guard's non-zero exit path when secrets are absent or
-unreadable, and runtime request-size enforcement. The image family was confirmed
-(from the upstream `nginx`/`nginx-unprivileged` Dockerfiles) to install
-`envsubst`, ship `/docker-entrypoint.d/20-envsubst-on-templates.sh`, keep the
-entrypoint, and own `/etc/nginx` as the unprivileged user.
+Not yet verified: clean-stack recreation with fresh containers and volumes, a
+full Compose rebuild/runtime pass after the Render Secret File change, and
+runtime request-size enforcement. The frontend image was rebuilt locally for
+this fix; the guard's missing-secret fail-closed path, the GID 1000 startup
+symlink bridge, and the unprivileged Nginx group membership were exercised in
+that image. The image family was confirmed (from the upstream
+`nginx`/`nginx-unprivileged` Dockerfiles) to install `envsubst`, ship
+`/docker-entrypoint.d/20-envsubst-on-templates.sh`, keep the entrypoint, and own
+`/etc/nginx` as the unprivileged user.

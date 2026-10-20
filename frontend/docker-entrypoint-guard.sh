@@ -6,12 +6,14 @@
 # when the required server-side secrets are missing or malformed so the
 # deployment never comes up in a half-configured state.
 #
-# The htpasswd path and the wrapped entrypoint can be overridden for tests:
-#   HTPASSWD_FILE      default /etc/nginx/auth/htpasswd
-#   DOCKER_ENTRYPOINT  default /docker-entrypoint.sh
+# The htpasswd paths and the wrapped entrypoint can be overridden for tests:
+#   HTPASSWD_FILE         default /etc/nginx/auth/htpasswd
+#   RENDER_HTPASSWD_FILE  default /etc/secrets/htpasswd
+#   DOCKER_ENTRYPOINT     default /docker-entrypoint.sh
 set -eu
 
 HTPASSWD_FILE="${HTPASSWD_FILE:-/etc/nginx/auth/htpasswd}"
+RENDER_HTPASSWD_FILE="${RENDER_HTPASSWD_FILE:-/etc/secrets/htpasswd}"
 DOCKER_ENTRYPOINT="${DOCKER_ENTRYPOINT:-/docker-entrypoint.sh}"
 
 # API_KEY is interpolated unescaped into an nginx `proxy_set_header` directive,
@@ -39,13 +41,24 @@ if [ "${#key}" -lt "$API_KEY_MIN_LENGTH" ] || [ "${#key}" -gt "$API_KEY_MAX_LENG
     exit 1
 fi
 
+# Render mounts Secret Files at /etc/secrets/<filename> rather than at the
+# Nginx auth path used by Compose. Bridge the fixed Render path only when the
+# expected path is absent, so an explicit bind mount always wins. The symlink
+# keeps the file read-only at its mounted location and leaves auth_basic intact.
+if [ ! -e "$HTPASSWD_FILE" ] && [ -f "$RENDER_HTPASSWD_FILE" ]; then
+    if ! ln -s "$RENDER_HTPASSWD_FILE" "$HTPASSWD_FILE"; then
+        echo "[entrypoint] FATAL: could not link ${RENDER_HTPASSWD_FILE} to ${HTPASSWD_FILE}." >&2
+        exit 1
+    fi
+fi
+
 # A missing host bind mount can become a directory in the container, and `-s`
 # alone would pass for a non-empty directory. Require a readable regular file
 # with at least one `user:hash` entry. The file must also be readable by the
 # container's nginx user (uid 101); that ownership cannot be checked from here
 # without the actual host mount.
 if [ ! -e "$HTPASSWD_FILE" ]; then
-    echo "[entrypoint] FATAL: ${HTPASSWD_FILE} is missing; mount the owner htpasswd file." >&2
+    echo "[entrypoint] FATAL: ${HTPASSWD_FILE} is missing; mount the owner htpasswd file or add a Render Secret File named htpasswd." >&2
     exit 1
 fi
 if [ -d "$HTPASSWD_FILE" ]; then

@@ -8,7 +8,7 @@ The API accepts repository identifiers and bounded query parameters for public G
 
 ## Secrets management
 
-Secrets remain server-side environment variables, including `API_KEY`, `GITHUB_TOKEN`, `OPENAI_API_KEY`, and database credentials. They are absent from frontend source and API responses. `.env.example` contains placeholders/local development values only; deployment secrets must come from the platform secret store. `OPENAI_API_KEY` is reserved for future LLM extraction and is not used by the current deterministic workflow (M4 is not implemented).
+Secrets remain server-side. `API_KEY`, `GITHUB_TOKEN`, `OPENAI_API_KEY`, and database credentials are environment variables; the owner Basic Auth credential is a secret file supplied by a Compose bind mount or, on Render, a Secret File. They are absent from frontend source and API responses. `.env.example` contains placeholders/local development values only; deployment secrets must come from the platform secret store. `OPENAI_API_KEY` is reserved for future LLM extraction and is not used by the current deterministic workflow (M4 is not implemented).
 
 ## CORS policy
 
@@ -32,7 +32,7 @@ Known GitHub failures map to stable status codes. Public error responses do not 
 
 ## Container security
 
-The backend image runs as a non-root user and installs pinned Python requirements without bytecode compilation. The frontend uses a multi-stage build and the unprivileged Nginx image, so development tooling is not present in the runtime image. No secret files are copied into either image: the owner Basic Auth file is mounted read-only at runtime, and the backend `API_KEY` is rendered into the frontend container's Nginx config at start from an environment variable (never baked into an image layer or the built assets).
+The backend image runs as a non-root user and installs pinned Python requirements without bytecode compilation. The frontend uses a multi-stage build and the unprivileged Nginx image, so development tooling is not present in the runtime image. No secret files are copied into either image. Compose bind-mounts the owner Basic Auth file read-only at `/etc/nginx/auth/htpasswd`. On Render, a Secret File named `htpasswd` is mounted at `/etc/secrets/htpasswd`; the frontend entrypoint creates a symlink at `/etc/nginx/auth/htpasswd` only when the bind-mounted path is absent. Render exposes Secret Files through group GID 1000, and the image adds the nginx user (UID 101) to that group so the unprivileged process can read the file. `frontend/.dockerignore` excludes `htpasswd` from the Docker build context. The backend `API_KEY` is rendered into the frontend container's Nginx config at start from an environment variable (never baked into an image layer or the built assets).
 
 ## Dependency and CI scanning
 
@@ -48,7 +48,7 @@ This is a single shared key, not a user system. There is **no data isolation bet
 
 For the single-owner public demo, the SPA and the API are served from one origin by the frontend Nginx container:
 
-- The whole server (SPA and `/api/`) is gated by Nginx `auth_basic` with a single owner credential (`/etc/nginx/auth/htpasswd`, mounted read-only and gitignored). Owner access is authenticated by that Basic Auth credential over HTTPS; the proxy is not an open relay.
+- The whole server (SPA and `/api/`) is gated by Nginx `auth_basic` with a single owner credential (`/etc/nginx/auth/htpasswd`). Compose bind-mounts that file read-only; on Render, the entrypoint symlinks it from the gitignored Secret File at `/etc/secrets/htpasswd`. Owner access is authenticated by that Basic Auth credential over HTTPS; the proxy is not an open relay.
 - `/api/` is reverse-proxied to the backend with `X-API-Key` injected server-side from the `API_KEY` environment variable at container start. The key is rendered into the in-container Nginx config and never appears in frontend source, `VITE_*` values, built assets, browser storage, or responses.
 - The SPA is built with `VITE_API_BASE_URL=/` and issues relative `/api/...` requests, so no CORS or cross-origin cookie handling is involved.
 - The proxy overwrites `X-Forwarded-For`/`X-Real-IP` with the connecting client address rather than appending client-supplied values, and the backend honors those headers only from the proxy address listed in `TRUSTED_PROXY_IPS` (matching the frontend container's static address on the `edge` network).
